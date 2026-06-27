@@ -1,36 +1,50 @@
-# STM32_SOCPROJECT
+# STM32 Voltage & Current Monitor (STM32_SOCPROJECT)
 
-Proyek ini adalah prototipe sistem pemantauan (monitoring) berbasis mikrokontroler STM32 (STM32F103). Proyek ini membaca nilai tegangan (voltage) dan arus (current) dari sensor analog, menampilkannya ke layar OLED, serta menyimpan data log ke dalam SD Card.
+This project is a prototype monitoring system based on the STM32 microcontroller (STM32F103). It reads voltage and current analog values from sensors, displays them on an SH1107 OLED screen, and logs the data into an SD Card in CSV format.
 
-## Penjelasan `main.c`
+## Project Structure
 
-File utama dari program ini adalah `Core/Src/main.c`. Berikut adalah alur dan fitur utama dari program:
+This project is generated using STM32CubeMX and follows the standard STM32 HAL project hierarchy:
 
-### 1. Inisialisasi Periferal (Hardware)
-Pada awal program (`main()` function), sistem akan melakukan inisialisasi:
-- **ADC1 dan ADC2**: Digunakan untuk membaca nilai analog dari sensor (tegangan dan arus).
-- **SPI1 dan SPI2**: Digunakan untuk komunikasi dengan perangkat luar. SPI1 kemungkinan besar digunakan untuk OLED SH1107, dan SPI2 digunakan untuk SD Card (ditandai dengan DMA yang diaktifkan untuk SPI2).
-- **FATFS**: Sistem file FAT diinisialisasi untuk mengakses SD Card.
-- **OLED SH1107**: Layar OLED diinisialisasi dan menampilkan *splash screen* "Voltage Monitor".
-- **SD Card**: Sistem akan mencoba *mount* SD Card. Jika berhasil, file `LOG.CSV` akan dibuat/dibuka.
+* **`Core/`**: Contains the main application code.
+  * `Src/main.c`: The main program body containing initialization and the main loop.
+  * `Inc/`: Header files for the application logic.
+* **`Drivers/`**: Contains the STM32F1xx HAL (Hardware Abstraction Layer) drivers and CMSIS files provided by STMicroelectronics.
+* **`Middlewares/`**: Contains third-party libraries. In this project, it includes the **FatFs** generic FAT file system module used to interface with the SD Card.
+* **`FATFS/`**: Contains the FATFS target user code (`user_diskio.c`) linking the FatFs library to the physical SPI SD card driver.
+* **`SOC_PROTO.ioc`**: The STM32CubeMX configuration file. This file can be opened in STM32CubeMX or STM32CubeIDE to reconfigure pins, clocks, or peripherals.
 
-### 2. Membaca Sensor (ADC)
-Di dalam *infinite loop* (`while (1)`), program melakukan *polling* ADC secara terus menerus:
-- **ADC1** dibaca untuk mendapatkan nilai mentah sensor pertama (Tegangan / Voltage).
-- **ADC2** dibaca untuk mendapatkan nilai mentah sensor kedua (Arus / Current).
-- Nilai ADC mentah (0-4095) dikonversi ke nilai tegangan nyata (asumsi referensi 3.3V) menggunakan rumus:
-  `nilai = (ADC_Read * 3.3) / 4095.0`
+## `main.c` Explanation
 
-### 3. Menampilkan ke OLED
-Program tidak memperbarui layar OLED setiap kali *loop* berjalan karena akan memperlambat proses pembacaan ADC. Sebaliknya, layar diperbarui setiap 20 iterasi (diatur oleh `DISPLAY_REFRESH_DIV`).
-- Fungsi `UpdateDisplay(voltage, current)` akan mengubah nilai *float* menjadi *string* (menggunakan fungsi kustom `FloatToStr` tanpa standard C-library float-printf) lalu menampilkannya.
-- Layar OLED juga akan menampilkan jumlah sampel data yang berhasil disimpan ke SD Card.
+The core logic of the application resides in `Core/Src/main.c`. Here is a breakdown of how the program works:
 
-### 4. Menyimpan Data (Data Logging) ke SD Card
-Data yang dibaca akan disimpan ke SD Card menggunakan fungsi `SD_Logger_AddSample`.
-- Untuk mempercepat kinerja dan menghindari keausan modul SD Card, penulisan ke SD Card (via FATFS `f_write`) dilakukan secara *batch*.
-- Sistem akan mengumpulkan 20 baris data ke dalam sebuah RAM *buffer* (diatur oleh `LOG_BUFFER_SAMPLES`).
-- Setelah terkumpul, fungsi `SD_Logger_Flush` dipanggil untuk menulis ke SD Card sekaligus. Operasi sinkronisasi file (FAT/metadata update dengan `f_sync`) hanya dilakukan setiap 10 kali penulisan *batch* (diatur oleh `LOG_SYNC_EVERY_FLUSH`).
+### 1. Hardware Initialization
+At the start of the `main()` function, the system initializes all required peripherals:
+- **ADC1 and ADC2**: Configured to read analog signals from the voltage and current sensors.
+- **SPI1 and SPI2**: SPI interfaces used for external communication. SPI1 is used for the SH1107 OLED, and SPI2 is used for the SD Card (with DMA enabled for efficient data transfer).
+- **FATFS**: Initializes the file system to interact with the SD card.
+- **OLED SH1107**: The display is initialized and a "Voltage Monitor" splash screen is rendered.
+- **SD Card Setup**: The system attempts to mount the SD card and open a file named `LOG.CSV`. If successful, the file remains open for continuous logging.
 
-### Kesimpulan Loop
-Setiap putaran iterasi pada `while(1)` akan diakhiri dengan `HAL_Delay(10);`, sehingga setiap perulangan (*tick*) memakan waktu sekitar 10 milidetik.
+### 2. Sensor Polling (ADC)
+Inside the main infinite loop (`while (1)`), the program continuously polls the ADCs:
+- **ADC1** is read to get the raw voltage sensor value.
+- **ADC2** is read to get the raw current sensor value.
+- The raw 12-bit ADC values (0-4095) are converted to actual voltage measurements (assuming a 3.3V reference) using the formula:
+  `value = (ADC_Read * 3.3) / 4095.0`
+
+### 3. OLED Display Update
+To prevent the display drawing process from blocking or slowing down the ADC polling, the OLED is not updated on every single loop iteration.
+- The screen is refreshed once every 20 loop ticks (controlled by the `DISPLAY_REFRESH_DIV` macro).
+- A custom `FloatToStr` function is used to convert floating-point numbers into strings (avoiding the overhead of standard C-library `printf` float support).
+- The `UpdateDisplay()` function redraws the voltage, current, and the total number of logged samples on the screen.
+
+### 4. SD Card Data Logging
+The sensor readings are logged to the SD Card using the `SD_Logger_AddSample` function.
+- To optimize SD Card lifespan and write speeds, the data is **batched** into RAM before writing.
+- The system accumulates 20 lines of CSV data (controlled by `LOG_BUFFER_SAMPLES`).
+- Once the buffer is full, `SD_Logger_Flush()` writes the entire chunk to the SD Card using a single `f_write` operation.
+- The FAT metadata is forcefully synchronized (`f_sync`) every 10 batch writes (controlled by `LOG_SYNC_EVERY_FLUSH`) to ensure data is safely stored without closing the file.
+
+### Main Loop Timing
+The end of each `while(1)` iteration has a `HAL_Delay(10);`, meaning the main loop runs roughly every 10 milliseconds.
