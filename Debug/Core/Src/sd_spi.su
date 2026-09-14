@@ -7,8 +7,8 @@
 ../Core/Src/sd_spi.c:97:18:SD_WaitReady	16	static
 ../Core/Src/sd_spi.c:107:16:SD_SendCommand	24	static
 ../Core/Src/sd_spi.c:126:9:sd_is_sdhc	4	static
-../Core/Src/sd_spi.c:131:11:SD_SPI_Init	32	static
-../Core/Src/sd_spi.c:185:11:SD_ReadBlocks	32	static
-../Core/Src/sd_spi.c:218:11:SD_ReadMultiBlocks	32	static
-../Core/Src/sd_spi.c:256:11:SD_WriteBlocks	32	static
-../Core/Src/sd_spi.c:288:11:SD_WriteMultiBlocks	32	static
+../Core/Src/sd_spi.c:132:11:SD_SPI_Init	32	static
+../Core/Src/sd_spi.c:194:11:SD_ReadBlocks	32	static
+../Core/Src/sd_spi.c:227:11:SD_ReadMultiBlocks	32	static
+../Core/Src/sd_spi.c:265:11:SD_WriteBlocks	32	static
+../Core/Src/sd_spi.c:297:11:SD_WriteMultiBlocks	32	static

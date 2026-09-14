@@ -127,11 +127,14 @@ uint8_t sd_is_sdhc(void) {
     return sdhc;
 }
 uint8_t card_initialized = 0;
+SD_InitError_t sd_init_error = SD_INIT_OK;
 
 SD_Status SD_SPI_Init(void) {
     uint8_t i, response;
     uint8_t r7[4];
     uint32_t retry;
+
+    sd_init_error = SD_INIT_OK;
 
     SD_CS_HIGH();
     for (i = 0; i < 10; i++) SD_TransmitByte(0xFF);
@@ -140,7 +143,10 @@ SD_Status SD_SPI_Init(void) {
     response = SD_SendCommand(CMD0, 0, 0x95);
     SD_CS_HIGH();
     SD_TransmitByte(0xFF);
-    if (response != 0x01) return SD_ERROR;
+    if (response != 0x01) {
+        sd_init_error = SD_INIT_ERR_CMD0;
+        return SD_ERROR;
+    }
 
     SD_CS_LOW();
     response = SD_SendCommand(CMD8, 0x000001AA, 0x87);
@@ -159,10 +165,10 @@ SD_Status SD_SPI_Init(void) {
             SD_TransmitByte(0xFF);
         } while (response != 0x00 && HAL_GetTick() < retry);
 
-        if (response != 0x00) return SD_ERROR;
-
-        SD_CS_LOW();
-        response = SD_SendCommand(CMD58, 0, 0xFF);
+        if (response != 0x00) {
+            sd_init_error = SD_INIT_ERR_ACMD41;
+            return SD_ERROR;
+        }
         uint8_t ocr[4];
         for (i = 0; i < 4; i++) ocr[i] = SD_ReceiveByte();
         SD_CS_HIGH();
@@ -175,7 +181,10 @@ SD_Status SD_SPI_Init(void) {
             SD_CS_HIGH();
             SD_TransmitByte(0xFF);
         } while (response != 0x00 && HAL_GetTick() < retry);
-        if (response != 0x00) return SD_ERROR;
+        if (response != 0x00) {
+            sd_init_error = SD_INIT_ERR_ACMD41;
+            return SD_ERROR;
+        }
     }
 
     card_initialized = 1;

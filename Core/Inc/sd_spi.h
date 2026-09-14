@@ -32,6 +32,23 @@ typedef enum {
     SD_ERROR
 } SD_Status;
 
+/* Finer-grained reason for the last SD_SPI_Init() failure, so the caller
+ * can tell "card not detected at all" apart from "card detected but stuck
+ * during initialization" without needing a UART/printf to see it. */
+typedef enum {
+    SD_INIT_OK = 0,
+    SD_INIT_ERR_CMD0,    /* No/wrong response to CMD0 (GO_IDLE_STATE):
+                           * card not responding at all - check wiring,
+                           * CS pin, power, or the SPI clock being too fast
+                           * for this particular card/wiring. */
+    SD_INIT_ERR_ACMD41   /* Card responded to CMD0 but never left the
+                           * "busy initializing" state (ACMD41 timeout):
+                           * card detected, but didn't finish coming up -
+                           * often an incompatible/marginal card, or a
+                           * clock speed it doesn't like. */
+} SD_InitError_t;
+
+extern SD_InitError_t sd_init_error;
 extern uint8_t card_initialized;
 
 SD_Status SD_SPI_Init(void);
