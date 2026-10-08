@@ -1,0 +1,16 @@
+../Core/Src/ekf_soc.c:7:14:EKF_SOC_EvalPoly	32	static
+../Core/Src/ekf_soc.c:16:13:EKF_SOC_ComputeRhoMu	32	static
+../Core/Src/ekf_soc.c:24:13:EKF_SOC_CorrectState	32	static
+../Core/Src/ekf_soc.c:30:13:EKF_SOC_CorrectCov	104	static
+../Core/Src/ekf_soc.c:66:13:EKF_SOC_PredictState	48	static
+../Core/Src/ekf_soc.c:77:13:EKF_SOC_PredictCov	96	static
+../Core/Src/ekf_soc.c:104:6:EKF_SOC_Init	16	static
+../Core/Src/ekf_soc.c:115:6:EKF_SOC_Reset	24	static
+../Core/Src/ekf_soc.c:124:6:EKF_SOC_Update	120	static
+../Core/Src/ekf_soc.c:175:7:EKF_SOC_GetVc1	16	static
+../Core/Src/ekf_soc.c:176:7:EKF_SOC_GetSoC	16	static
+../Core/Src/ekf_soc.c:177:7:EKF_SOC_GetYhat	16	static
+../Core/Src/ekf_soc.c:178:7:EKF_SOC_GetInnov	16	static
+../Core/Src/ekf_soc.c:179:7:EKF_SOC_GetRho	16	static
+../Core/Src/ekf_soc.c:180:7:EKF_SOC_GetMu	16	static
+../Core/Src/ekf_soc.c:181:7:EKF_SOC_GetP	24	static

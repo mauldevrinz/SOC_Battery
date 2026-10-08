@@ -1,3 +1,4 @@
+"./Core/Src/ekf_soc.o"
 "./Core/Src/fonts.o"
 "./Core/Src/main.o"
 "./Core/Src/sd_benchmark.o"

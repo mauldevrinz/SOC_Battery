@@ -1,0 +1,16 @@
+../Core/Src/ekf_soc.c:7:14:EKF_SOC_EvalPoly	2
+../Core/Src/ekf_soc.c:16:13:EKF_SOC_ComputeRhoMu	3
+../Core/Src/ekf_soc.c:24:13:EKF_SOC_CorrectState	1
+../Core/Src/ekf_soc.c:30:13:EKF_SOC_CorrectCov	10
+../Core/Src/ekf_soc.c:66:13:EKF_SOC_PredictState	1
+../Core/Src/ekf_soc.c:77:13:EKF_SOC_PredictCov	8
+../Core/Src/ekf_soc.c:104:6:EKF_SOC_Init	1
+../Core/Src/ekf_soc.c:115:6:EKF_SOC_Reset	1
+../Core/Src/ekf_soc.c:124:6:EKF_SOC_Update	4
+../Core/Src/ekf_soc.c:175:7:EKF_SOC_GetVc1	1
+../Core/Src/ekf_soc.c:176:7:EKF_SOC_GetSoC	1
+../Core/Src/ekf_soc.c:177:7:EKF_SOC_GetYhat	1
+../Core/Src/ekf_soc.c:178:7:EKF_SOC_GetInnov	1
+../Core/Src/ekf_soc.c:179:7:EKF_SOC_GetRho	1
+../Core/Src/ekf_soc.c:180:7:EKF_SOC_GetMu	1
+../Core/Src/ekf_soc.c:181:7:EKF_SOC_GetP	1

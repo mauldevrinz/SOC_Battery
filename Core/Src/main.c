@@ -2,7 +2,6 @@
 /**
   ******************************************************************************
   * @file           : main.c
-  * @brief          : SOC Monitor — SH1107 128x128, WCS1700, SD logger
   ******************************************************************************
   * @attention
   *
@@ -26,6 +25,7 @@
 #include "fonts.h"
 #include "sd_functions.h"
 #include "sd_spi.h"
+#include "ekf_soc.h"
 #include <stdio.h>
 #include <string.h>
 /* USER CODE END Includes */
@@ -38,62 +38,30 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
-/* ---- Display refresh throttle -------------------------------------------
- * Main loop runs every ~10ms. A full SH1107 frame push takes a few ms
- * over SPI, so we only refresh the OLED every DISPLAY_REFRESH_DIV ticks
- * (~200ms) to avoid hogging SPI1 and causing visible flicker.
- * ------------------------------------------------------------------------- */
 #define DISPLAY_REFRESH_DIV     20
 
-/* ---- OLED layout constants (128x128 SH1107) ------------------------------
- *
- *  y=0..12   : Header  "SOC MONITORING" (Font_7x10)
- *  y=13      : divider line
- *  y=17..50  : Voltage block  — label Font_7x10, value Font_11x18
- *  y=51      : divider line
- *  y=54..87  : Current block  — label Font_7x10, value Font_11x18
- *  y=89      : divider line
- *  y=92..127 : Footer 2-col   — left: LOGGED count, right: SD status
- *              vertical separator at x=63
- *
- * Font metrics:
- *   Font_7x10  : char  7px wide, 10px tall
- *   Font_11x18 : char 11px wide, 18px tall
- *   Font_16x26 : char 16px wide, 26px tall  (not used — won't fit 6-digit numbers)
- * ------------------------------------------------------------------------- */
-#define OLED_W                  SH1107_WIDTH    /* 128 */
-#define OLED_H                  SH1107_HEIGHT   /* 128 */
+#define OLED_W                  SH1107_WIDTH
+#define OLED_H                  SH1107_HEIGHT
 
-/* Header */
 #define HDR_Y                   2
 #define HDR_LINE_Y              13
 
-/* Voltage block */
 #define VLT_LABEL_Y             17
-#define VLT_VALUE_Y             29    /* Font_11x18 baseline */
-#define VLT_UNIT_Y              35    /* Font_7x10 unit "V" beside value */
+#define VLT_VALUE_Y             29
+#define VLT_UNIT_Y              35
 #define VLT_LINE_Y              51
 
-/* Current block */
 #define CUR_LABEL_Y             54
 #define CUR_VALUE_Y             66
 #define CUR_UNIT_Y              72
 #define CUR_LINE_Y              89
 
-/* Footer */
 #define FTR_LINE_Y              90
 #define FTR_COL_SEP_X           63
 #define FTR_LABEL_Y             93
 #define FTR_VALUE_Y             104
 
-/* ---- Sensor scaling -------------------------------------------------------
- * Voltage divider: R1=180k (to input), R2=10k (to GND).
- *   Vin = Vadc1 * (R1+R2)/R2 = Vadc1 * 19
- *
- * Current: WCS1700 Hall sensor, ratiometric @3.3V supply.
- *   Datasheet: 33 mV/A @5V → 21.78 mV/A @3.3V
- *   Offset: measured at 0A via auto-zero on every boot (see AutoZero_Compute).
- * ------------------------------------------------------------------------- */
+/* adjustable: ADC / sensor scaling */
 #define ADC_VREF                3.3f
 #define ADC_MAX_COUNT           4095.0f
 #define ADC_OVERSAMPLE_COUNT    64
@@ -102,31 +70,21 @@
 #define VOLTAGE_DIVIDER_R2      10000.0f
 #define VOLTAGE_DIVIDER_RATIO   ((VOLTAGE_DIVIDER_R1 + VOLTAGE_DIVIDER_R2) / VOLTAGE_DIVIDER_R2)
 
-#define CURRENT_SENSOR_OFFSET       1.690f               /* fallback only */
+#define CURRENT_SENSOR_OFFSET       1.690f
 #define CURRENT_SENSOR_SENSITIVITY  (0.033f * (3.3f/5.0f))
 
-/* ---- EMA filter -----------------------------------------------------------
- *   y[n] = y[n-1] + alpha * (x[n] - y[n-1])
- * ------------------------------------------------------------------------- */
+/* adjustable: EMA smoothing */
 #define VOLTAGE_EMA_ALPHA       0.08f
 #define CURRENT_EMA_ALPHA       0.04f
 
-/* ---- SD card logger -------------------------------------------------------
- * Main loop runs every ~10ms. We only push one sample into the logger
- * every LOG_SAMPLE_DIV ticks (~1000ms), so the CSV ends up with one row
- * per second instead of one row per 10ms tick.
- * ------------------------------------------------------------------------- */
+/* adjustable: SD logger timing */
 #define LOG_FILENAME             "LOG.CSV"
 #define LOG_BUFFER_SAMPLES       1
-#define LOG_LINE_MAXLEN          32    /* timestamp,voltage,current */
+#define LOG_LINE_MAXLEN          44
 #define LOG_SYNC_EVERY_FLUSH     1
-#define LOG_SAMPLE_DIV           100   /* 100 * 10ms = 1000ms -> log once per second */
+#define LOG_SAMPLE_DIV           100
 
-/* ---- Auto-zero ------------------------------------------------------------
- * 1000 samples × 10ms = ~10 seconds. Each sample is itself a 64-reading
- * average from ADC_ReadAveraged, so the final value averages 64,000
- * ADC2 conversions. Requires zero current through WCS1700 during boot.
- * ------------------------------------------------------------------------- */
+/* adjustable: auto-zero sample count */
 #define AUTOZERO_SAMPLES        1000
 #define AUTOZERO_FALLBACK       CURRENT_SENSOR_OFFSET
 
@@ -155,10 +113,8 @@ static float adc1VoltFiltered = 0.0f;
 static float adc2VoltFiltered = 0.0f;
 static uint8_t emaInitialized = 0;
 
-/* Runtime offset from auto-zero — replaces hardcoded CURRENT_SENSOR_OFFSET */
 static float currentSensorOffset = AUTOZERO_FALLBACK;
 
-/* SD logger */
 static FIL      logFile;
 static uint8_t  sdReady = 0;
 static char     logChunk[LOG_BUFFER_SAMPLES * LOG_LINE_MAXLEN];
@@ -166,14 +122,13 @@ static uint16_t logChunkLen = 0;
 static uint8_t  logSampleCount = 0;
 static uint16_t logFlushCount = 0;
 static uint32_t logTotalSamples = 0;
-static uint32_t logTickOffset   = 0;   /* tick saat sample pertama — untuk hitung elapsed seconds */
+static uint32_t logTickOffset   = 0;
 
-/* SD status string — short enough to fit Font_7x10 in 63px half-column */
 static char sdStatusStr[10] = "UNKNOWN";
-
-/* Shared scratch buffer for snprintf — only one call at a time, never
- * called from an ISR, so a single static buffer is safe here. */
 static char lineBuf[24];
+
+static EKF_SOC_HandleTypeDef hekfSoc;
+static uint32_t ekfLastTick = 0;
 
 /* USER CODE END PV */
 
@@ -193,9 +148,10 @@ static void     DrawMainScreen(float v, float i);
 static void     DrawCalibratingScreen(uint16_t samplesDone, float latestOffset);
 static void     DrawZeroDoneScreen(float offset);
 static uint8_t  SD_Logger_Init(void);
-static void     SD_Logger_AddSample(float v, float i);
+static void     SD_Logger_AddSample(float v, float i, float soc_pct);
 static void     SD_Logger_Flush(void);
 static void     AutoZero_Compute(void);
+static void     EKF_SOC_ConfigureModel(EKF_SOC_HandleTypeDef *hekf);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -229,13 +185,11 @@ int main(void)
   MX_ADC2_Init();
   MX_SPI1_Init();
   MX_SPI2_Init();
-  /* MX_FATFS_Init() intentionally skipped — see sd_functions.c comment. */
 
   /* USER CODE BEGIN 2 */
   HAL_ADCEx_Calibration_Start(&hadc1);
   HAL_ADCEx_Calibration_Start(&hadc2);
 
-  /* OLED init — splash for ~600ms while SD mounts */
   SH1107_Init();
   SH1107_Fill(SH1107_COLOR_BLACK);
   SH1107_GotoXY(22, 2);
@@ -245,17 +199,22 @@ int main(void)
   SH1107_Puts("Initializing...", &Font_7x10, SH1107_COLOR_WHITE);
   SH1107_UpdateScreen();
 
-  /* Mount SD — sets sdStatusStr and sdReady */
   sdReady = SD_Logger_Init();
   HAL_Delay(600);
 
-  /* Auto-zero phase — ~10 seconds, OLED shows progress */
   AutoZero_Compute();
 
-  /* Show zero-done result for 1.5 s then jump into loop */
   DrawZeroDoneScreen(currentSensorOffset);
   SH1107_UpdateScreen();
   HAL_Delay(1500);
+
+  /* EKF: ConfigureModel must run before Init */
+  EKF_SOC_ConfigureModel(&hekfSoc);
+  {
+      float x0[2] = { 0.0f, 1.0f };
+      EKF_SOC_Init(&hekfSoc, x0);
+  }
+  ekfLastTick = HAL_GetTick();
 
   /* USER CODE END 2 */
 
@@ -282,15 +241,23 @@ int main(void)
     vAdc2Raw = adc2VoltFiltered;
     current  = (vAdc2Raw - currentSensorOffset) / CURRENT_SENSOR_SENSITIVITY;
 
+    {
+        uint32_t nowTick = HAL_GetTick();
+        float Ts = (float)(nowTick - ekfLastTick) / 1000.0f;
+        ekfLastTick = nowTick;
+        if (Ts <= 0.0f) Ts = 0.01f;
+
+        EKF_SOC_Update(&hekfSoc, current, voltage, Ts);
+    }
+
     if (++displayCounter >= DISPLAY_REFRESH_DIV) {
         displayCounter = 0;
         DrawMainScreen(voltage, current);
     }
 
-    /* Log to SD once per second instead of every ~10ms tick */
     if (++logSampleCounter >= LOG_SAMPLE_DIV) {
         logSampleCounter = 0;
-        SD_Logger_AddSample(voltage, current);
+        SD_Logger_AddSample(voltage, current, EKF_SOC_GetSoC(&hekfSoc) * 100.0f);
     }
 
     HAL_Delay(10);
@@ -302,10 +269,6 @@ int main(void)
 }
 
 /* USER CODE BEGIN 4 */
-
-/* --------------------------------------------------------------------------
- * ADC helpers
- * -------------------------------------------------------------------------- */
 
 static uint16_t ADC_ReadAveraged(ADC_HandleTypeDef *hadc)
 {
@@ -322,10 +285,6 @@ static uint16_t ADC_ReadAveraged(ADC_HandleTypeDef *hadc)
     return valid ? (uint16_t)(sum / valid) : 0;
 }
 
-/* --------------------------------------------------------------------------
- * Float-to-string without float printf
- * -------------------------------------------------------------------------- */
-
 static void FloatToStr(float value, char *buf, uint8_t decimals)
 {
     int32_t scale = 1;
@@ -340,38 +299,15 @@ static void FloatToStr(float value, char *buf, uint8_t decimals)
     sprintf(buf, "%s%ld.%0*ld", neg ? "-" : "", (long)whole, decimals, (long)frac);
 }
 
-/* --------------------------------------------------------------------------
- * DrawMainScreen
- *
- * Layout (128x128):
- *
- *  ┌──────────────────────────────┐  y=0
- *  │      SOC MONITORING          │  Font_7x10, centered, y=2
- *  ├──────────────────────────────┤  y=13
- *  │ VOLTAGE                      │  Font_7x10, y=17
- *  │ 48.23         V              │  Font_11x18 value, Font_7x10 unit
- *  ├──────────────────────────────┤  y=51
- *  │ CURRENT                      │  Font_7x10, y=54
- *  │ 12.50         A              │  Font_11x18 value, Font_7x10 unit
- *  ├──────────────────────────────┤  y=89
- *  │ LOGGED      │ SD CARD        │  Font_7x10 labels, y=93
- *  │ 001234      │ READY          │  Font_7x10 values, y=104
- *  └─────────────┴────────────────┘  y=127
- *
- * Only the data areas are cleared between refreshes — header and footer
- * borders are drawn once and only touched if needed.
- * -------------------------------------------------------------------------- */
 static void DrawMainScreen(float v, float i)
 {
     char numBuf[12];
 
-    /* ---- Header ----------------------------------------------------------*/
     SH1107_DrawFilledRectangle(0, 0, OLED_W, 13, SH1107_COLOR_BLACK);
     SH1107_GotoXY(8, HDR_Y);
     SH1107_Puts("SOC MONITORING", &Font_7x10, SH1107_COLOR_WHITE);
     SH1107_DrawLine(0, HDR_LINE_Y, OLED_W - 1, HDR_LINE_Y, SH1107_COLOR_WHITE);
 
-    /* ---- Voltage block ---------------------------------------------------*/
     SH1107_DrawFilledRectangle(0, VLT_LABEL_Y, OLED_W, VLT_LINE_Y - VLT_LABEL_Y + 1,
                                SH1107_COLOR_BLACK);
     SH1107_GotoXY(3, VLT_LABEL_Y);
@@ -380,13 +316,11 @@ static void DrawMainScreen(float v, float i)
     FloatToStr(v, numBuf, 2);
     SH1107_GotoXY(3, VLT_VALUE_Y);
     SH1107_Puts(numBuf, &Font_11x18, SH1107_COLOR_WHITE);
-    /* Unit "V" right-aligned to x=122 */
     SH1107_GotoXY(116, VLT_UNIT_Y);
     SH1107_Puts("V", &Font_7x10, SH1107_COLOR_WHITE);
 
     SH1107_DrawLine(0, VLT_LINE_Y, OLED_W - 1, VLT_LINE_Y, SH1107_COLOR_WHITE);
 
-    /* ---- Current block ---------------------------------------------------*/
     SH1107_DrawFilledRectangle(0, CUR_LABEL_Y, OLED_W, CUR_LINE_Y - CUR_LABEL_Y + 1,
                                SH1107_COLOR_BLACK);
     SH1107_GotoXY(3, CUR_LABEL_Y);
@@ -400,26 +334,18 @@ static void DrawMainScreen(float v, float i)
 
     SH1107_DrawLine(0, CUR_LINE_Y, OLED_W - 1, CUR_LINE_Y, SH1107_COLOR_WHITE);
 
-    /* ---- Footer 2-column -------------------------------------------------
-     * Left  (x=0..62)  : logged sample count
-     * Right (x=64..127): SD status
-     * Separator: vertical line at x=63
-     * --------------------------------------------------------------------- */
     SH1107_DrawFilledRectangle(0, FTR_LINE_Y + 1, OLED_W,
                                OLED_H - FTR_LINE_Y - 1, SH1107_COLOR_BLACK);
 
-    /* Left column */
     SH1107_GotoXY(3, FTR_LABEL_Y);
     SH1107_Puts("LOGGED", &Font_7x10, SH1107_COLOR_WHITE);
     snprintf(lineBuf, sizeof(lineBuf), "%06lu", (unsigned long)logTotalSamples);
     SH1107_GotoXY(3, FTR_VALUE_Y);
     SH1107_Puts(lineBuf, &Font_7x10, SH1107_COLOR_WHITE);
 
-    /* Vertical separator */
     SH1107_DrawLine(FTR_COL_SEP_X, FTR_LINE_Y + 1, FTR_COL_SEP_X,
                     OLED_H - 1, SH1107_COLOR_WHITE);
 
-    /* Right column */
     SH1107_GotoXY(67, FTR_LABEL_Y);
     SH1107_Puts("SD CARD", &Font_7x10, SH1107_COLOR_WHITE);
     SH1107_GotoXY(67, FTR_VALUE_Y);
@@ -428,25 +354,6 @@ static void DrawMainScreen(float v, float i)
     SH1107_UpdateScreen();
 }
 
-/* --------------------------------------------------------------------------
- * DrawCalibratingScreen
- *
- *  ┌──────────────────────────────┐  y=0
- *  │       CALIBRATING            │  Font_7x10, centered, y=2
- *  ├──────────────────────────────┤  y=13
- *  │ No load on sensor input.     │  Font_7x10, y=18
- *  │ Keep current at zero.        │  Font_7x10, y=29
- *  ├──────────────────────────────┤  y=42
- *  │ PROGRESS                     │  Font_7x10, y=46
- *  │ [████████████░░░░░░░░░░░] nnn%│  bar y=58..69, pct label y=74
- *  ├──────────────────────────────┤  y=86
- *  │ Sampling ADC2...             │  Font_7x10, y=90
- *  │ Offset: x.xxxx V             │  Font_7x10, y=101
- *  └──────────────────────────────┘
- *
- * Bar: x=3, y=58, width=122, height=12
- *      fill grows from x=4 to x=4+fillW as samples accumulate.
- * -------------------------------------------------------------------------- */
 static void DrawCalibratingScreen(uint16_t samplesDone, float latestOffset)
 {
     const uint16_t BAR_X = 3, BAR_Y = 58, BAR_W = 122, BAR_H = 12;
@@ -454,42 +361,34 @@ static void DrawCalibratingScreen(uint16_t samplesDone, float latestOffset)
 
     SH1107_Fill(SH1107_COLOR_BLACK);
 
-    /* Header */
     SH1107_GotoXY(15, HDR_Y);
     SH1107_Puts("CALIBRATING", &Font_7x10, SH1107_COLOR_WHITE);
     SH1107_DrawLine(0, HDR_LINE_Y, OLED_W - 1, HDR_LINE_Y, SH1107_COLOR_WHITE);
 
-    /* Instructions */
     SH1107_GotoXY(3, 18);
     SH1107_Puts("No load on sensor", &Font_7x10, SH1107_COLOR_WHITE);
     SH1107_GotoXY(3, 29);
     SH1107_Puts("input. Zero amps.", &Font_7x10, SH1107_COLOR_WHITE);
     SH1107_DrawLine(0, 42, OLED_W - 1, 42, SH1107_COLOR_WHITE);
 
-    /* Progress label */
     SH1107_GotoXY(3, 46);
     SH1107_Puts("PROGRESS", &Font_7x10, SH1107_COLOR_WHITE);
 
-    /* Progress bar outline */
     SH1107_DrawRectangle(BAR_X, BAR_Y, BAR_W, BAR_H, SH1107_COLOR_WHITE);
 
-    /* Fill */
     uint16_t fillW = (uint16_t)((uint32_t)samplesDone * (BAR_W - 2) / AUTOZERO_SAMPLES);
     if (fillW > 0) {
         SH1107_DrawFilledRectangle(BAR_X + 1, BAR_Y + 1, fillW, BAR_H - 2,
                                    SH1107_COLOR_WHITE);
     }
 
-    /* Percentage text — centered in bar */
     uint8_t pct = (uint8_t)((uint32_t)samplesDone * 100 / AUTOZERO_SAMPLES);
     snprintf(lineBuf, sizeof(lineBuf), "%3u%%", pct);
-    /* 4 chars * 7px = 28px; center at x = (128-28)/2 = 50 */
     SH1107_GotoXY(50, 74);
     SH1107_Puts(lineBuf, &Font_7x10, SH1107_COLOR_WHITE);
 
     SH1107_DrawLine(0, 86, OLED_W - 1, 86, SH1107_COLOR_WHITE);
 
-    /* Live offset readout */
     SH1107_GotoXY(3, 90);
     SH1107_Puts("Sampling ADC2...", &Font_7x10, SH1107_COLOR_WHITE);
 
@@ -505,49 +404,27 @@ static void DrawCalibratingScreen(uint16_t samplesDone, float latestOffset)
     SH1107_UpdateScreen();
 }
 
-/* --------------------------------------------------------------------------
- * DrawZeroDoneScreen
- *
- *  ┌──────────────────────────────┐
- *  │     ZERO COMPLETE            │  y=2
- *  ├──────────────────────────────┤  y=13
- *  │ Offset captured:             │  y=18
- *  │ 1.6847        V              │  Font_11x18 value + Font_7x10 unit, y=32
- *  ├──────────────────────────────┤  y=55
- *  │ Samples : 64000              │  y=59
- *  │ Quality : GOOD               │  y=70
- *  ├──────────────────────────────┤  y=83
- *  │ Connect load now.            │  y=88
- *  │ Starting in 1.5s...          │  y=99
- *  ├──────────────────────────────┤  y=113
- *  │      SOC MONITORING          │  y=117
- *  └──────────────────────────────┘
- * -------------------------------------------------------------------------- */
 static void DrawZeroDoneScreen(float offset)
 {
     char offBuf[12];
 
     SH1107_Fill(SH1107_COLOR_BLACK);
 
-    /* Header */
     SH1107_GotoXY(8, HDR_Y);
     SH1107_Puts("ZERO COMPLETE", &Font_7x10, SH1107_COLOR_WHITE);
     SH1107_DrawLine(0, HDR_LINE_Y, OLED_W - 1, HDR_LINE_Y, SH1107_COLOR_WHITE);
 
-    /* Offset value — Font_11x18 for prominence */
     SH1107_GotoXY(3, 18);
     SH1107_Puts("Offset captured:", &Font_7x10, SH1107_COLOR_WHITE);
 
     FloatToStr(offset, offBuf, 4);
     SH1107_GotoXY(3, 32);
     SH1107_Puts(offBuf, &Font_11x18, SH1107_COLOR_WHITE);
-    /* "V" unit beside value: value is up to 6 chars * 11px = 66px → unit at x=72 */
     SH1107_GotoXY(72, 40);
     SH1107_Puts("V", &Font_7x10, SH1107_COLOR_WHITE);
 
     SH1107_DrawLine(0, 55, OLED_W - 1, 55, SH1107_COLOR_WHITE);
 
-    /* Stats */
     snprintf(lineBuf, sizeof(lineBuf), "Samples : %u",
              (unsigned)(AUTOZERO_SAMPLES * ADC_OVERSAMPLE_COUNT));
     SH1107_GotoXY(3, 59);
@@ -557,7 +434,6 @@ static void DrawZeroDoneScreen(float offset)
 
     SH1107_DrawLine(0, 83, OLED_W - 1, 83, SH1107_COLOR_WHITE);
 
-    /* Instructions */
     SH1107_GotoXY(3, 88);
     SH1107_Puts("Connect load now.", &Font_7x10, SH1107_COLOR_WHITE);
     SH1107_GotoXY(3, 99);
@@ -565,26 +441,15 @@ static void DrawZeroDoneScreen(float offset)
 
     SH1107_DrawLine(0, 113, OLED_W - 1, 113, SH1107_COLOR_WHITE);
 
-    /* Footer brand */
     SH1107_GotoXY(8, 117);
     SH1107_Puts("SOC MONITORING", &Font_7x10, SH1107_COLOR_WHITE);
 }
 
-/* --------------------------------------------------------------------------
- * AutoZero_Compute
- *
- * Collects AUTOZERO_SAMPLES readings of ADC2 at 10ms intervals, averages
- * them, and stores the result in currentSensorOffset. Calls
- * DrawCalibratingScreen() every 10 samples to animate the progress bar.
- *
- * REQUIREMENT: no current must flow through WCS1700 during this phase.
- * -------------------------------------------------------------------------- */
 static void AutoZero_Compute(void)
 {
     double   acc   = 0.0;
     uint16_t valid = 0;
 
-    /* Show initial state with empty bar */
     DrawCalibratingScreen(0, 0.0f);
 
     for (uint16_t s = 1; s <= AUTOZERO_SAMPLES; s++) {
@@ -593,10 +458,8 @@ static void AutoZero_Compute(void)
         acc += (double)vRaw;
         valid++;
 
-        /* Compute running average for live offset readout */
         float runningOffset = (float)(acc / valid);
 
-        /* Refresh OLED every 10 samples (~100ms) */
         if ((s % 10) == 0 || s == AUTOZERO_SAMPLES) {
             DrawCalibratingScreen(s, runningOffset);
         }
@@ -607,12 +470,7 @@ static void AutoZero_Compute(void)
     if (valid > 0) {
         currentSensorOffset = (float)(acc / (double)valid);
     }
-    /* else: currentSensorOffset stays at AUTOZERO_FALLBACK */
 }
-
-/* --------------------------------------------------------------------------
- * SD logger
- * -------------------------------------------------------------------------- */
 
 static uint8_t SD_Logger_Init(void)
 {
@@ -638,7 +496,7 @@ static uint8_t SD_Logger_Init(void)
 
     if (f_size(&logFile) == 0) {
         UINT bw;
-        const char *hdr = "Timestamp_s,Voltage_V,Current_A\r\n";
+        const char *hdr = "Timestamp_s,Voltage_V,Current_A,SoC_pct\r\n";
         f_write(&logFile, hdr, strlen(hdr), &bw);
         f_sync(&logFile);
     } else {
@@ -649,22 +507,10 @@ static uint8_t SD_Logger_Init(void)
     return 1;
 }
 
-/* --------------------------------------------------------------------------
- * SD_Logger_AddSample
- *
- * FIX: tambah guard buffer overflow sebelum snprintf.
- * Kalau sisa buffer < LOG_LINE_MAXLEN, flush dulu supaya tidak ada
- * snprintf yang return negatif (overflow) dan sample hilang diam-diam.
- *
- * Kolom offset auto-zero sudah dihapus dari CSV — cuma timestamp,
- * voltage, current. Nilai offset masih dipakai internal untuk kalkulasi
- * current real-time, tapi tidak lagi ditulis ke log.
- * -------------------------------------------------------------------------- */
-static void SD_Logger_AddSample(float v, float i)
+static void SD_Logger_AddSample(float v, float i, float soc_pct)
 {
     if (!sdReady) return;
 
-    /* Guard: flush dulu kalau buffer hampir penuh */
     if (logChunkLen + LOG_LINE_MAXLEN >= sizeof(logChunk)) {
         SD_Logger_Flush();
         if (!sdReady) return;
@@ -672,21 +518,20 @@ static void SD_Logger_AddSample(float v, float i)
 
     uint32_t now = HAL_GetTick();
 
-    /* Catat tick saat sample pertama masuk sebagai titik nol */
     if (logTotalSamples == 0 && logSampleCount == 0) {
         logTickOffset = now;
     }
 
-    /* Elapsed time dalam detik sejak sample pertama */
     uint32_t elapsed_s = (now - logTickOffset) / 1000UL;
 
-    char vStr[12], iStr[12];
+    char vStr[12], iStr[12], socStr[12];
     FloatToStr(v, vStr, 3);
     FloatToStr(i, iStr, 3);
+    FloatToStr(soc_pct, socStr, 2);
 
     int n = snprintf(&logChunk[logChunkLen], sizeof(logChunk) - logChunkLen,
-                      "%lu,%s,%s\r\n",
-                      (unsigned long)elapsed_s, vStr, iStr);
+                      "%lu,%s,%s,%s\r\n",
+                      (unsigned long)elapsed_s, vStr, iStr, socStr);
 
     if (n > 0) logChunkLen += (uint16_t)n;
 
@@ -713,6 +558,43 @@ static void SD_Logger_Flush(void)
 
     logChunkLen    = 0;
     logSampleCount = 0;
+}
+
+/* adjustable: EKF battery model / tuning — the one function to edit */
+static void EKF_SOC_ConfigureModel(EKF_SOC_HandleTypeDef *hekf)
+{
+    hekf->Qn_for_rho = 100.0f;
+
+    hekf->rho_lo = 0.0f;
+    hekf->rho_hi = 0.05f;
+
+    hekf->A_lo[0] = -0.02f;  hekf->A_lo[1] = 0.0f;
+    hekf->A_lo[2] = 0.0f;    hekf->A_lo[3] = 0.0f;
+    hekf->A_hi[0] = -0.02f;  hekf->A_hi[1] = 0.0f;
+    hekf->A_hi[2] = 0.0f;    hekf->A_hi[3] = 0.0f;
+
+    hekf->B_lo[0] = 0.0002f;
+    hekf->B_lo[1] = -1.0f / (3600.0f * hekf->Qn_for_rho);
+    hekf->B_hi[0] = 0.0002f;
+    hekf->B_hi[1] = hekf->B_lo[1];
+
+    hekf->Rs_lo = 0.02f;
+    hekf->Rs_hi = 0.02f;
+
+    hekf->C0[0] = -1.0f;
+    hekf->C0[1] =  0.0f;
+
+    hekf->ocvCoeffs[0] = 4.8f;   hekf->ocvCoeffs[1] = 12.0f;
+    hekf->ocvOrder      = 1;
+    hekf->dOcvCoeffs[0] = 4.8f;
+    hekf->dOcvOrder      = 0;
+
+    hekf->Q[0] = 0.000001f; hekf->Q[1] = 0.0f;
+    hekf->Q[2] = 0.0f;      hekf->Q[3] = 0.000001f;
+    hekf->R    = 0.0001f;
+
+    hekf->P[0] = 0.0001f; hekf->P[1] = 0.0f;
+    hekf->P[2] = 0.0f;    hekf->P[3] = 0.01f;
 }
 
 /* USER CODE END 4 */
@@ -814,7 +696,6 @@ static void MX_SPI2_Init(void)
   hspi2.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
   hspi2.Init.CRCPolynomial = 10;
   if (HAL_SPI_Init(&hspi2) != HAL_OK) Error_Handler();
-  /* Bump SPI2 to /4 (~2 MBit/s on 8MHz APB1) after identification phase */
   hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_4;
   if (HAL_SPI_Init(&hspi2) != HAL_OK) Error_Handler();
 }
