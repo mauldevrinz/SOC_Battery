@@ -46,6 +46,7 @@ typedef struct
 
 void EKF_SOC_Init(EKF_SOC_HandleTypeDef *hekf, const float x0[2]);
 void EKF_SOC_Reset(EKF_SOC_HandleTypeDef *hekf, float soc0, const float P0[4]);
+float EKF_SOC_SocFromOcv(const EKF_SOC_HandleTypeDef *hekf, float v);
 void EKF_SOC_Update(EKF_SOC_HandleTypeDef *hekf, float I, float V, float Ts);
 
 float EKF_SOC_GetVc1  (const EKF_SOC_HandleTypeDef *hekf);

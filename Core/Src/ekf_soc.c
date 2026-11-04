@@ -170,6 +170,25 @@ void EKF_SOC_Update(EKF_SOC_HandleTypeDef *hekf, float I, float V, float Ts)
     a1 = expf(Ts * Ak11);
     EKF_SOC_PredictState(hekf, I, a1, Ak11, Bk1, Bk2 * Ts);
     EKF_SOC_PredictCov(hekf, a1);
+
+    /* FIX: batasi state SOC 0..1 agar tidak windup (SOC -7000%) */
+    if (hekf->x_hat[1] > 1.0f) hekf->x_hat[1] = 1.0f;
+    if (hekf->x_hat[1] < 0.0f) hekf->x_hat[1] = 0.0f;
+}
+
+/* FIX: cari SOC (0..1) dari tegangan istirahat dgn bisection pada kurva OCV */
+float EKF_SOC_SocFromOcv(const EKF_SOC_HandleTypeDef *hekf, float v)
+{
+    float lo = 0.0f, hi = 1.0f;
+    int i;
+    if (v <= EKF_SOC_EvalPoly(hekf->ocvCoeffs, hekf->ocvOrder, 0.0f)) return 0.0f;
+    if (v >= EKF_SOC_EvalPoly(hekf->ocvCoeffs, hekf->ocvOrder, 1.0f)) return 1.0f;
+    for (i = 0; i < 24; i++) {
+        float mid = 0.5f * (lo + hi);
+        if (EKF_SOC_EvalPoly(hekf->ocvCoeffs, hekf->ocvOrder, mid) < v) lo = mid;
+        else hi = mid;
+    }
+    return 0.5f * (lo + hi);
 }
 
 float EKF_SOC_GetVc1  (const EKF_SOC_HandleTypeDef *hekf) { return hekf->x_hat[0]; }
