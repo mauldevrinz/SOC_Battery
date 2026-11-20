@@ -8,7 +8,8 @@ void TJC_HMI_Init(UART_HandleTypeDef *huart);
 HAL_StatusTypeDef TJC_HMI_SendCommand(const char *command);
 HAL_StatusTypeDef TJC_HMI_SetStatus(const char *status_text);
 HAL_StatusTypeDef TJC_HMI_DrawMonitor(float voltage, float current,
-                                      float soc_percent,
+                                      float soc_percent, float soh_percent,
+                                      uint8_t sys_bat_percent,
                                       uint32_t logged_samples,
                                       const char *sd_status,
                                       const char *run_status);

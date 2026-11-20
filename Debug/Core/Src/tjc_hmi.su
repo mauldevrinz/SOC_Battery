@@ -1,0 +1,8 @@
+../Core/Src/tjc_hmi.c:30:6:TJC_HMI_Init	16	static
+../Core/Src/tjc_hmi.c:46:19:TJC_HMI_SendCommand	32	static
+../Core/Src/tjc_hmi.c:61:26:TJC_HMI_DrawText	168	static
+../Core/Src/tjc_hmi.c:78:26:TJC_HMI_DrawBox	96	static
+../Core/Src/tjc_hmi.c:97:26:TJC_HMI_FillRect	96	static
+../Core/Src/tjc_hmi.c:109:26:TJC_HMI_DrawMeasurement	96	static
+../Core/Src/tjc_hmi.c:173:19:TJC_HMI_SetStatus	48	static
+../Core/Src/tjc_hmi.c:200:19:TJC_HMI_DrawMonitor	128	static

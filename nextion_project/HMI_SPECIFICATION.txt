@@ -1,0 +1,439 @@
+========================================================================
+  BIMA SOC LFP - NEXTION/TJC HMI PROJECT SPECIFICATION
+  Display: 320 x 240  |  7 Pages  |  Dark Theme (Black BG)
+========================================================================
+
+────────────────────────────────────────────────────────────────────────
+  PAGE 0: HOME  (name: page0)
+  Background Color: 0 (BLACK)
+────────────────────────────────────────────────────────────────────────
+  [Text      ] objname="tTitle"
+              Position: x=5, y=2, w=160, h=28
+              Text: "BIMA SOC LFP"
+
+  [Text      ] objname="tCharge"
+              Position: x=168, y=2, w=40, h=28
+              Text: "BAT"
+
+  [Text      ] objname="tVbatInt"
+              Position: x=210, y=2, w=50, h=14
+              Text: "4.12"
+
+  [Progress  ] objname="jBatInt"
+              Position: x=210, y=18, w=50, h=10
+              Value: 85
+
+  [Text      ] objname="tStatus"
+              Position: x=262, y=2, w=55, h=28
+              Text: "READY"
+
+  [Text      ] objname="tVlbl"
+              Position: x=12, y=38, w=140, h=20
+              Text: "VOLTAGE (LFP)"
+
+  [Text      ] objname="tV"
+              Position: x=12, y=60, w=140, h=50
+              Text: "0.00"
+
+  [Text      ] objname="tIlbl"
+              Position: x=167, y=38, w=140, h=20
+              Text: "CURRENT"
+
+  [Text      ] objname="tI"
+              Position: x=167, y=60, w=140, h=50
+              Text: "0.00"
+
+  [Text      ] objname="tSOClbl"
+              Position: x=12, y=118, w=80, h=20
+              Text: "SOC (EKF)"
+
+  [Text      ] objname="tSOC"
+              Position: x=95, y=118, w=70, h=20
+              Text: "0.0"
+
+  [Text      ] objname="tSOHlbl"
+              Position: x=175, y=118, w=40, h=20
+              Text: "SOH"
+
+  [Text      ] objname="tSOH"
+              Position: x=218, y=118, w=70, h=20
+              Text: "100.0"
+
+  [Progress  ] objname="jSOC"
+              Position: x=12, y=142, w=296, h=16
+              Value: 0
+
+  [Text      ] objname="tTemplbl"
+              Position: x=12, y=164, w=50, h=18
+              Text: "TEMP:"
+
+  [Text      ] objname="tTemp"
+              Position: x=62, y=164, w=60, h=18
+              Text: "25.0"
+
+  [Text      ] objname="tSD"
+              Position: x=130, y=164, w=80, h=18
+              Text: "READY"
+
+  [Text      ] objname="tLog"
+              Position: x=218, y=164, w=90, h=18
+              Text: "0"
+
+  [Button    ] objname="bMenu"  (Component ID = 3)
+              Position: x=10, y=190, w=95, h=42
+              Text: "MENU"
+              ★ Touch Release Event → CENTANG 'Send Component ID'
+
+  [Button    ] objname="bQuick"  (Component ID = 4)
+              Position: x=112, y=190, w=95, h=42
+              Text: "QUICK"
+              ★ Touch Release Event → CENTANG 'Send Component ID'
+
+  [Button    ] objname="bAnalyze"  (Component ID = 5)
+              Position: x=214, y=190, w=96, h=42
+              Text: "ANALYZE"
+              ★ Touch Release Event → CENTANG 'Send Component ID'
+
+────────────────────────────────────────────────────────────────────────
+  PAGE 1: MENU  (name: page1)
+  Background Color: 0 (BLACK)
+────────────────────────────────────────────────────────────────────────
+  [Text      ] objname="tMenuTitle"
+              Position: x=5, y=2, w=310, h=30
+              Text: "MAIN MENU"
+
+  [Button    ] objname="bM1"  (Component ID = 1)
+              Position: x=15, y=38, w=290, h=30
+              Text: "1. HOME MONITOR"
+              ★ Touch Release Event → CENTANG 'Send Component ID'
+
+  [Button    ] objname="bM2"  (Component ID = 2)
+              Position: x=15, y=71, w=290, h=30
+              Text: "2. QUICK CHECK"
+              ★ Touch Release Event → CENTANG 'Send Component ID'
+
+  [Button    ] objname="bM3"  (Component ID = 3)
+              Position: x=15, y=104, w=290, h=30
+              Text: "3. BATTERY ANALYZE"
+              ★ Touch Release Event → CENTANG 'Send Component ID'
+
+  [Button    ] objname="bM4"  (Component ID = 4)
+              Position: x=15, y=137, w=290, h=30
+              Text: "4. BATTERY SETUP"
+              ★ Touch Release Event → CENTANG 'Send Component ID'
+
+  [Button    ] objname="bM5"  (Component ID = 5)
+              Position: x=15, y=170, w=290, h=30
+              Text: "5. DATA LOGGER"
+              ★ Touch Release Event → CENTANG 'Send Component ID'
+
+  [Button    ] objname="bM6"  (Component ID = 6)
+              Position: x=15, y=203, w=290, h=30
+              Text: "6. HISTORY & TREND"
+              ★ Touch Release Event → CENTANG 'Send Component ID'
+
+────────────────────────────────────────────────────────────────────────
+  PAGE 2: QUICK CHECK  (name: page2)
+  Background Color: 0 (BLACK)
+────────────────────────────────────────────────────────────────────────
+  [Text      ] objname="tQCtitle"
+              Position: x=5, y=2, w=310, h=28
+              Text: "QUICK CHECK"
+
+  [Text      ] objname="lVnow"
+              Position: x=10, y=36, w=100, h=22
+              Text: "V-Now :"
+
+  [Text      ] objname="tVnow"
+              Position: x=110, y=36, w=80, h=22
+              Text: "0.00"
+
+  [Text      ] objname="lVmin"
+              Position: x=195, y=36, w=45, h=22
+              Text: "Min:"
+
+  [Text      ] objname="tVmin"
+              Position: x=240, y=36, w=70, h=22
+              Text: "0.00"
+
+  [Text      ] objname="lVmax"
+              Position: x=10, y=60, w=100, h=22
+              Text: "V-Max :"
+
+  [Text      ] objname="tVmax"
+              Position: x=110, y=60, w=80, h=22
+              Text: "0.00"
+
+  [Text      ] objname="lInow"
+              Position: x=10, y=88, w=100, h=22
+              Text: "I-Now :"
+
+  [Text      ] objname="tInow"
+              Position: x=110, y=88, w=80, h=22
+              Text: "0.00"
+
+  [Text      ] objname="lIpeak"
+              Position: x=195, y=88, w=50, h=22
+              Text: "Peak:"
+
+  [Text      ] objname="tIpeak"
+              Position: x=245, y=88, w=65, h=22
+              Text: "0.00"
+
+  [Text      ] objname="lSocOcv"
+              Position: x=10, y=116, w=100, h=22
+              Text: "OCV-SoC:"
+
+  [Text      ] objname="tSocOcv"
+              Position: x=110, y=116, w=80, h=22
+              Text: "0.0"
+
+  [Text      ] objname="lHold"
+              Position: x=10, y=140, w=100, h=22
+              Text: "Hold:"
+
+  [Text      ] objname="tHold"
+              Position: x=110, y=140, w=60, h=22
+              Text: "RUN"
+
+  [Text      ] objname="lZero"
+              Position: x=175, y=140, w=55, h=22
+              Text: "Zero:"
+
+  [Text      ] objname="tIzero"
+              Position: x=230, y=140, w=80, h=22
+              Text: "1.690"
+
+  [Button    ] objname="bBack"  (Component ID = 1)
+              Position: x=5, y=195, w=100, h=40
+              Text: "BACK"
+              ★ Touch Release Event → CENTANG 'Send Component ID'
+
+  [Button    ] objname="bHold"  (Component ID = 2)
+              Position: x=110, y=195, w=100, h=40
+              Text: "HOLD"
+              ★ Touch Release Event → CENTANG 'Send Component ID'
+
+  [Button    ] objname="bReset"  (Component ID = 3)
+              Position: x=215, y=195, w=100, h=40
+              Text: "RESET"
+              ★ Touch Release Event → CENTANG 'Send Component ID'
+
+────────────────────────────────────────────────────────────────────────
+  PAGE 3: ANALYZE  (name: page3)
+  Background Color: 0 (BLACK)
+────────────────────────────────────────────────────────────────────────
+  [Text      ] objname="tANtitle"
+              Position: x=5, y=2, w=310, h=28
+              Text: "BATTERY ANALYZE"
+
+  [Text      ] objname="lSOcv"
+              Position: x=10, y=40, w=150, h=24
+              Text: "OCV-based SOC:"
+
+  [Text      ] objname="tSocOcv"
+              Position: x=165, y=40, w=140, h=24
+              Text: "0.0"
+
+  [Text      ] objname="lSEkf"
+              Position: x=10, y=68, w=150, h=24
+              Text: "AEKF-based SOC:"
+
+  [Text      ] objname="tSocEkf"
+              Position: x=165, y=68, w=140, h=24
+              Text: "0.0"
+
+  [Text      ] objname="lSoh"
+              Position: x=10, y=96, w=150, h=24
+              Text: "Battery SOH:"
+
+  [Text      ] objname="tSoh"
+              Position: x=165, y=96, w=140, h=24
+              Text: "100.0"
+
+  [Text      ] objname="lR0"
+              Position: x=10, y=124, w=150, h=24
+              Text: "Int-Resistance:"
+
+  [Text      ] objname="tR0"
+              Position: x=165, y=124, w=140, h=24
+              Text: "0.00"
+
+  [Text      ] objname="lPwr"
+              Position: x=10, y=152, w=80, h=24
+              Text: "Power:"
+
+  [Text      ] objname="tPwr"
+              Position: x=90, y=152, w=70, h=24
+              Text: "0.0"
+
+  [Text      ] objname="lWh"
+              Position: x=170, y=152, w=50, h=24
+              Text: "Wh:"
+
+  [Text      ] objname="tEnergy"
+              Position: x=220, y=152, w=90, h=24
+              Text: "0.0"
+
+  [Button    ] objname="bBack"  (Component ID = 1)
+              Position: x=80, y=195, w=160, h=40
+              Text: "BACK"
+              ★ Touch Release Event → CENTANG 'Send Component ID'
+
+────────────────────────────────────────────────────────────────────────
+  PAGE 4: SETUP  (name: page4)
+  Background Color: 0 (BLACK)
+────────────────────────────────────────────────────────────────────────
+  [Text      ] objname="tSUtitle"
+              Position: x=5, y=2, w=310, h=28
+              Text: "BATTERY SETUP"
+
+  [Text      ] objname="lNomV"
+              Position: x=10, y=45, w=200, h=24
+              Text: "NOMINAL VOLTAGE:"
+
+  [Button    ] objname="bCycleV"  (Component ID = 2)
+              Position: x=30, y=72, w=260, h=35
+              Text: "12.8 V (4S)"
+              ★ Touch Release Event → CENTANG 'Send Component ID'
+
+  [Text      ] objname="tNomV"
+              Position: x=30, y=72, w=260, h=35
+              Text: "12.8"
+
+  [Text      ] objname="lCapAh"
+              Position: x=10, y=115, w=200, h=24
+              Text: "CAPACITY RATING:"
+
+  [Button    ] objname="bCycleCap"  (Component ID = 3)
+              Position: x=30, y=140, w=260, h=35
+              Text: "100.0 Ah (LFP)"
+              ★ Touch Release Event → CENTANG 'Send Component ID'
+
+  [Text      ] objname="tCapAh"
+              Position: x=30, y=140, w=260, h=35
+              Text: "100.0"
+
+  [Button    ] objname="bBack"  (Component ID = 1)
+              Position: x=80, y=195, w=160, h=40
+              Text: "BACK"
+              ★ Touch Release Event → CENTANG 'Send Component ID'
+
+────────────────────────────────────────────────────────────────────────
+  PAGE 5: DATALOG  (name: page5)
+  Background Color: 0 (BLACK)
+────────────────────────────────────────────────────────────────────────
+  [Text      ] objname="tDLtitle"
+              Position: x=5, y=2, w=310, h=28
+              Text: "DATA LOGGER"
+
+  [Text      ] objname="lState"
+              Position: x=10, y=45, w=120, h=24
+              Text: "Log State:"
+
+  [Text      ] objname="tLogState"
+              Position: x=135, y=45, w=170, h=24
+              Text: "STOPPED"
+
+  [Text      ] objname="lInterval"
+              Position: x=10, y=73, w=120, h=24
+              Text: "Interval:"
+
+  [Number    ] objname="tInterval"
+              Position: x=135, y=73, w=100, h=24
+              Value: 1000
+
+  [Text      ] objname="lCount"
+              Position: x=10, y=101, w=120, h=24
+              Text: "Samples:"
+
+  [Text      ] objname="tCount"
+              Position: x=135, y=101, w=170, h=24
+              Text: "0"
+
+  [Text      ] objname="lWh"
+              Position: x=10, y=129, w=120, h=24
+              Text: "Energy Wh:"
+
+  [Text      ] objname="tWh"
+              Position: x=135, y=129, w=170, h=24
+              Text: "0.00"
+
+  [Text      ] objname="lTime"
+              Position: x=10, y=157, w=120, h=24
+              Text: "Runtime:"
+
+  [Text      ] objname="tTime"
+              Position: x=135, y=157, w=170, h=24
+              Text: "00:00"
+
+  [Button    ] objname="bBack"  (Component ID = 1)
+              Position: x=5, y=195, w=150, h=40
+              Text: "BACK"
+              ★ Touch Release Event → CENTANG 'Send Component ID'
+
+  [Button    ] objname="bToggle"  (Component ID = 2)
+              Position: x=165, y=195, w=150, h=40
+              Text: "START/STOP"
+              ★ Touch Release Event → CENTANG 'Send Component ID'
+
+────────────────────────────────────────────────────────────────────────
+  PAGE 6: HISTORY  (name: page6)
+  Background Color: 0 (BLACK)
+────────────────────────────────────────────────────────────────────────
+  [Text      ] objname="tHStitle"
+              Position: x=5, y=2, w=310, h=28
+              Text: "HISTORY & TREND"
+
+  [Text      ] objname="lRec"
+              Position: x=10, y=42, w=290, h=22
+              Text: "Last Measurement Record:"
+
+  [Text      ] objname="lTarget"
+              Position: x=10, y=66, w=290, h=22
+              Text: "Target: LiFePO4 4S 100Ah"
+
+  [Text      ] objname="lHistV"
+              Position: x=10, y=94, w=100, h=22
+              Text: "Voltage:"
+
+  [Text      ] objname="tHistV"
+              Position: x=110, y=94, w=70, h=22
+              Text: "0.00"
+
+  [Text      ] objname="lHistI"
+              Position: x=185, y=94, w=60, h=22
+              Text: "Curr:"
+
+  [Text      ] objname="tHistI"
+              Position: x=245, y=94, w=65, h=22
+              Text: "0.00"
+
+  [Text      ] objname="lHistSoc"
+              Position: x=10, y=120, w=60, h=22
+              Text: "SoC:"
+
+  [Text      ] objname="tHistSoc"
+              Position: x=70, y=120, w=80, h=22
+              Text: "0.0"
+
+  [Text      ] objname="lHistSoh"
+              Position: x=160, y=120, w=55, h=22
+              Text: "SoH:"
+
+  [Text      ] objname="tHistSoh"
+              Position: x=215, y=120, w=80, h=22
+              Text: "100.0"
+
+  [Text      ] objname="lHistStat"
+              Position: x=10, y=148, w=70, h=22
+              Text: "Status:"
+
+  [Text      ] objname="tHistStat"
+              Position: x=80, y=148, w=220, h=22
+              Text: "OK"
+
+  [Button    ] objname="bBack"  (Component ID = 1)
+              Position: x=80, y=195, w=160, h=40
+              Text: "BACK"
+              ★ Touch Release Event → CENTANG 'Send Component ID'

@@ -21,14 +21,13 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "sh1107.h"
-#include "fonts.h"
 #include "sd_functions.h"
 #include "sd_spi.h"
 #include "ekf_soc.h"
 #include "tjc_hmi.h"
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -39,29 +38,7 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
-#define DISPLAY_REFRESH_DIV     20
 #define HMI_REFRESH_INTERVAL_MS  1000U
-
-#define OLED_W                  SH1107_WIDTH
-#define OLED_H                  SH1107_HEIGHT
-
-#define HDR_Y                   2
-#define HDR_LINE_Y              13
-
-#define VLT_LABEL_Y             17
-#define VLT_VALUE_Y             29
-#define VLT_UNIT_Y              35
-#define VLT_LINE_Y              51
-
-#define CUR_LABEL_Y             54
-#define CUR_VALUE_Y             66
-#define CUR_UNIT_Y              72
-#define CUR_LINE_Y              89
-
-#define FTR_LINE_Y              90
-#define FTR_COL_SEP_X           63
-#define FTR_LABEL_Y             93
-#define FTR_VALUE_Y             104
 
 /* adjustable: ADC / sensor scaling */
 #define ADC_VREF                3.3f
@@ -75,10 +52,17 @@
 #define CURRENT_SENSOR_OFFSET       1.690f
 #define CURRENT_SENSOR_SENSITIVITY  (0.033f * (3.3f/5.0f))
 
-/* adjustable: parameter baterai 3S22P 18650 (12 V nominal, 9.0-12.6 V, 30 Ah) */
-#define BATT_CAPACITY_AH        30.0f   /* kapasitas nominal pack (Ah) */
-#define BATT_RS_OHM             0.010f  /* resistansi dalam pack 3S22P (estimasi, ~5 mOhm sel + kabel/BMS) */
+/* Pack LiFePO4 4S 100Ah (12.8 V nominal, 10.0-14.6 V operating range). */
+#define BATT_CAPACITY_AH        100.0f  /* kapasitas nominal pack (Ah) */
+#define BATT_RS_OHM             0.005f  /* estimasi resistansi pack 4S 100Ah (sel ~0.5 mOhm x4 + busbar/kabel/BMS); ukur untuk tuning */
 #define VBATT_MIN_VALID         6.0f    /* di bawah ini dianggap baterai belum terpasang */
+
+/* adjustable: re-sync SOC dari OCV saat baterai istirahat (anti SOC "terkunci") */
+#define REST_CURRENT_A          2.0f    /* |I| di bawah ini dianggap istirahat (~C/50) */
+#define REST_RESYNC_MS          30000U  /* lama istirahat sebelum dicek */
+#define RESYNC_SOC_ERR          0.05f   /* beda SOC EKF vs OCV minimal utk re-sync (5%) */
+#define RESYNC_EDGE_LO          0.25f   /* re-sync hanya di ujung kurva (OCV informatif), */
+#define RESYNC_EDGE_HI          0.85f   /* bukan di tengah plateau LFP yang datar */
 
 /* adjustable: SD card init */
 #define SD_POWERUP_DELAY_MS     300
@@ -92,7 +76,7 @@
 /* adjustable: SD logger timing */
 #define LOG_FILENAME             "LOG.CSV"
 #define LOG_BUFFER_SAMPLES       1
-#define LOG_LINE_MAXLEN          44
+#define LOG_LINE_MAXLEN          80
 #define LOG_SYNC_EVERY_FLUSH     1
 #define LOG_SAMPLE_DIV           100
 
@@ -111,6 +95,8 @@
 ADC_HandleTypeDef hadc1;
 ADC_HandleTypeDef hadc2;
 
+I2C_HandleTypeDef hi2c1;
+
 SPI_HandleTypeDef hspi1;
 SPI_HandleTypeDef hspi2;
 DMA_HandleTypeDef hdma_spi2_rx;
@@ -122,6 +108,9 @@ UART_HandleTypeDef huart1;
 volatile float voltage = 0.0f;
 volatile float current = 0.0f;
 volatile float soc_pct = 0.0f;   /* SOC (%) untuk Live Expressions */
+volatile float soh_pct = 100.0f; /* SOH (%) */
+volatile float v_internal_bat = 0.0f;
+volatile uint8_t sys_bat_pct = 100;
 volatile float vAdc2Raw = 0.0f;
 static float adc1VoltFiltered = 0.0f;
 static float adc2VoltFiltered = 0.0f;
@@ -138,10 +127,10 @@ static uint32_t logTotalSamples = 0;
 static uint32_t logTickOffset   = 0;
 
 static char sdStatusStr[10] = "UNKNOWN";
-static char lineBuf[24];
 
 static EKF_SOC_HandleTypeDef hekfSoc;
 static uint32_t ekfLastTick = 0;
+static uint32_t restStartTick = 0;
 
 /* USER CODE END PV */
 
@@ -154,17 +143,17 @@ static void MX_ADC2_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_SPI2_Init(void);
 static void MX_USART1_UART_Init(void);
+static void MX_I2C1_Init(void);
 /* USER CODE BEGIN PFP */
-static uint16_t ADC_ReadAveraged(ADC_HandleTypeDef *hadc);
+
+static uint16_t ADC_ReadChannelAveraged(ADC_HandleTypeDef *hadc, uint32_t channel);
 static void     FloatToStr(float value, char *buf, uint8_t decimals);
-static void     DrawMainScreen(float v, float i);
-static void     DrawCalibratingScreen(uint16_t samplesDone, float latestOffset);
-static void     DrawZeroDoneScreen(float offset);
 static uint8_t  SD_Logger_Init(void);
 static void     SD_Logger_AddSample(float v, float i, float soc_pct);
 static void     SD_Logger_Flush(void);
 static void     AutoZero_Compute(void);
 static void     EKF_SOC_ConfigureModel(EKF_SOC_HandleTypeDef *hekf);
+static float    SocFromOcv_LUT(float v_pack);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -180,7 +169,6 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-  uint16_t displayCounter  = 0;
   uint16_t logSampleCounter = 0;
   uint32_t hmiLastRefresh = 0;
   /* USER CODE END 1 */
@@ -207,20 +195,12 @@ int main(void)
   MX_SPI1_Init();
   MX_SPI2_Init();
   MX_USART1_UART_Init();
-  TJC_HMI_Init(&huart1);
+  MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
   HAL_ADCEx_Calibration_Start(&hadc1);
   HAL_ADCEx_Calibration_Start(&hadc2);
 
-  SH1107_Init();
-  SH1107_Fill(SH1107_COLOR_BLACK);
-  SH1107_GotoXY(22, 2);
-  SH1107_Puts("SOC MONITORING", &Font_7x10, SH1107_COLOR_WHITE);
-  SH1107_DrawLine(0, 13, OLED_W - 1, 13, SH1107_COLOR_WHITE);
-  SH1107_GotoXY(16, 56);
-  SH1107_Puts("Initializing...", &Font_7x10, SH1107_COLOR_WHITE);
-  SH1107_UpdateScreen();
-  (void)TJC_HMI_DrawMonitor(0.0f, 0.0f, 0.0f, 0U, sdStatusStr, "INIT");
+  (void)TJC_HMI_DrawMonitor(0.0f, 0.0f, 0.0f, 100.0f, 100, 0U, sdStatusStr, "INIT");
 
   sdReady = SD_Logger_Init();
   HAL_Delay(600);
@@ -229,19 +209,17 @@ int main(void)
   AutoZero_Compute();
   (void)TJC_HMI_SetStatus("START");
 
-  DrawZeroDoneScreen(currentSensorOffset);
-  SH1107_UpdateScreen();
-  HAL_Delay(1500);
+  HAL_Delay(1000);
 
   /* EKF: ConfigureModel must run before Init */
   EKF_SOC_ConfigureModel(&hekfSoc);
   {
-      uint16_t raw_soc_adc = ADC_ReadAveraged(&hadc1);
+      uint16_t raw_soc_adc = ADC_ReadChannelAveraged(&hadc1, ADC_CHANNEL_0);
       adc1VoltFiltered = (float)raw_soc_adc * ADC_VREF / ADC_MAX_COUNT;
-      adc2VoltFiltered = (float)ADC_ReadAveraged(&hadc2) * ADC_VREF / ADC_MAX_COUNT;
+      adc2VoltFiltered = (float)ADC_ReadChannelAveraged(&hadc2, ADC_CHANNEL_1) * ADC_VREF / ADC_MAX_COUNT;
       emaInitialized = 1U;
       float v0   = adc1VoltFiltered * VOLTAGE_DIVIDER_RATIO;
-      float soc0 = EKF_SOC_SocFromOcv(&hekfSoc, v0);
+      float soc0 = SocFromOcv_LUT(v0);   /* FIX: SOC awal dari tabel OCV LiFePO4 (bukan inversi polinomial) */
       float x0[2] = { 0.0f, soc0 };
       EKF_SOC_Init(&hekfSoc, x0);
   }
@@ -254,8 +232,8 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    uint16_t raw1 = ADC_ReadAveraged(&hadc1);
-    uint16_t raw2 = ADC_ReadAveraged(&hadc2);
+    uint16_t raw1 = ADC_ReadChannelAveraged(&hadc1, ADC_CHANNEL_0);
+    uint16_t raw2 = ADC_ReadChannelAveraged(&hadc2, ADC_CHANNEL_1);
 
     float adc1Raw = (float)raw1 * ADC_VREF / ADC_MAX_COUNT;
     float adc2Raw = (float)raw2 * ADC_VREF / ADC_MAX_COUNT;
@@ -267,6 +245,16 @@ int main(void)
     } else {
         adc1VoltFiltered += VOLTAGE_EMA_ALPHA * (adc1Raw - adc1VoltFiltered);
         adc2VoltFiltered += CURRENT_EMA_ALPHA * (adc2Raw - adc2VoltFiltered);
+    }
+
+    /* Read Internal System Battery on PA2 (10k+10k divider -> 2.0x) */
+    {
+        uint16_t raw_int = ADC_ReadChannelAveraged(&hadc1, ADC_CHANNEL_2);
+        float v_pin2 = (float)raw_int * ADC_VREF / ADC_MAX_COUNT;
+        v_internal_bat = v_pin2 * 2.0f;
+        if (v_internal_bat >= 4.20f) sys_bat_pct = 100;
+        else if (v_internal_bat <= 3.00f) sys_bat_pct = 0;
+        else sys_bat_pct = (uint8_t)((v_internal_bat - 3.00f) / (4.20f - 3.00f) * 100.0f);
     }
 
     voltage  = adc1VoltFiltered * VOLTAGE_DIVIDER_RATIO;
@@ -282,23 +270,40 @@ int main(void)
         /* FIX: abaikan transien saat baterai belum terpasang / tegangan belum valid */
         if (voltage > VBATT_MIN_VALID)
             EKF_SOC_Update(&hekfSoc, current, voltage, Ts);
-        soc_pct = EKF_SOC_GetSoC(&hekfSoc) * 100.0f;
-    }
 
-    if (++displayCounter >= DISPLAY_REFRESH_DIV) {
-        displayCounter = 0;
-        DrawMainScreen(voltage, current);
+        /* FIX: re-sync SOC dari OCV bila istirahat lama & SOC EKF menyimpang jauh.
+           Tanpa ini EKF bisa "terkunci" di SOC salah (P sudah mengecil, selisih tegangan
+           diserap state Vc1). Hanya aktif di ujung kurva OCV (<25% atau >85%). */
+        if (voltage > VBATT_MIN_VALID && fabsf(current) < REST_CURRENT_A) {
+            if (restStartTick == 0U) restStartTick = nowTick;
+            if ((nowTick - restStartTick) >= REST_RESYNC_MS) {
+                float socV = SocFromOcv_LUT(voltage);
+                float socE = EKF_SOC_GetSoC(&hekfSoc);
+                if ((socV < RESYNC_EDGE_LO || socV > RESYNC_EDGE_HI) &&
+                    fabsf(socV - socE) > RESYNC_SOC_ERR) {
+                    static const float P0[4] = { 0.0001f, 0.0f, 0.0f, 0.01f };
+                    EKF_SOC_Reset(&hekfSoc, socV, P0);
+                }
+                restStartTick = nowTick;   /* cek lagi 30 detik berikutnya */
+            }
+        } else {
+            restStartTick = 0U;
+        }
+
+        soc_pct = EKF_SOC_GetSoC(&hekfSoc) * 100.0f;
+        if (soc_pct < 0.0f)   soc_pct = 0.0f;
+        if (soc_pct > 100.0f) soc_pct = 100.0f;
     }
 
     if ((HAL_GetTick() - hmiLastRefresh) >= HMI_REFRESH_INTERVAL_MS) {
         hmiLastRefresh = HAL_GetTick();
-        (void)TJC_HMI_DrawMonitor(voltage, current, soc_pct, logTotalSamples,
-                                  sdStatusStr, "READY");
+        (void)TJC_HMI_DrawMonitor(voltage, current, soc_pct, soh_pct, sys_bat_pct,
+                                  logTotalSamples, sdStatusStr, "READY");
     }
 
     if (++logSampleCounter >= LOG_SAMPLE_DIV) {
         logSampleCounter = 0;
-        SD_Logger_AddSample(voltage, current, EKF_SOC_GetSoC(&hekfSoc) * 100.0f);
+        SD_Logger_AddSample(voltage, current, soc_pct);
     }
 
     HAL_Delay(10);
@@ -396,7 +401,6 @@ static void MX_ADC1_Init(void)
   {
     Error_Handler();
   }
-
   /* USER CODE BEGIN ADC1_Init 2 */
 
   /* USER CODE END ADC1_Init 2 */
@@ -447,6 +451,40 @@ static void MX_ADC2_Init(void)
   /* USER CODE BEGIN ADC2_Init 2 */
 
   /* USER CODE END ADC2_Init 2 */
+
+}
+
+/**
+  * @brief I2C1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_I2C1_Init(void)
+{
+
+  /* USER CODE BEGIN I2C1_Init 0 */
+
+  /* USER CODE END I2C1_Init 0 */
+
+  /* USER CODE BEGIN I2C1_Init 1 */
+
+  /* USER CODE END I2C1_Init 1 */
+  hi2c1.Instance = I2C1;
+  hi2c1.Init.ClockSpeed = 100000;
+  hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
+  hi2c1.Init.OwnAddress1 = 0;
+  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c1.Init.OwnAddress2 = 0;
+  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN I2C1_Init 2 */
+
+  /* USER CODE END I2C1_Init 2 */
 
 }
 
@@ -615,13 +653,23 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(CSB6_GPIO_Port, &GPIO_InitStruct);
 
 /* USER CODE BEGIN MX_GPIO_Init_2 */
+  /* FIX: PA2 = ADC channel 2 (baterai internal) harus mode analog */
+  GPIO_InitStruct.Pin  = GPIO_PIN_2;
+  GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
 
-static uint16_t ADC_ReadAveraged(ADC_HandleTypeDef *hadc)
+static uint16_t ADC_ReadChannelAveraged(ADC_HandleTypeDef *hadc, uint32_t channel)
 {
+    ADC_ChannelConfTypeDef sConfig = {0};
+    sConfig.Channel = channel;
+    sConfig.Rank = ADC_REGULAR_RANK_1;
+    sConfig.SamplingTime = ADC_SAMPLETIME_71CYCLES_5;
+    HAL_ADC_ConfigChannel(hadc, &sConfig);
+
     uint32_t sum = 0;
     uint8_t  valid = 0;
     for (uint8_t i = 0; i < ADC_OVERSAMPLE_COUNT; i++) {
@@ -649,150 +697,22 @@ static void FloatToStr(float value, char *buf, uint8_t decimals)
     sprintf(buf, "%s%ld.%0*ld", neg ? "-" : "", (long)whole, decimals, (long)frac);
 }
 
-static void DrawMainScreen(float v, float i)
+/* Tabel OCV (tegangan istirahat) pack LiFePO4 4S -> SOC. Dipakai utk SOC awal. */
+static float SocFromOcv_LUT(float v_pack)
 {
-    char numBuf[12];
+    static const float V[] = {12.00f, 12.85f, 12.95f, 13.04f, 13.12f, 13.19f,
+                              13.25f, 13.29f, 13.33f, 13.38f, 13.55f};
+    static const float S[] = { 0.0f,  0.1f,   0.2f,   0.3f,   0.4f,   0.5f,
+                               0.6f,  0.7f,   0.8f,   0.9f,   1.0f};
+    const uint8_t N = 11;
 
-    SH1107_DrawFilledRectangle(0, 0, OLED_W, 13, SH1107_COLOR_BLACK);
-    SH1107_GotoXY(8, HDR_Y);
-    SH1107_Puts("SOC MONITORING", &Font_7x10, SH1107_COLOR_WHITE);
-    SH1107_DrawLine(0, HDR_LINE_Y, OLED_W - 1, HDR_LINE_Y, SH1107_COLOR_WHITE);
-
-    SH1107_DrawFilledRectangle(0, VLT_LABEL_Y, OLED_W, VLT_LINE_Y - VLT_LABEL_Y + 1,
-                               SH1107_COLOR_BLACK);
-    SH1107_GotoXY(3, VLT_LABEL_Y);
-    SH1107_Puts("VOLTAGE", &Font_7x10, SH1107_COLOR_WHITE);
-
-    FloatToStr(v, numBuf, 2);
-    SH1107_GotoXY(3, VLT_VALUE_Y);
-    SH1107_Puts(numBuf, &Font_11x18, SH1107_COLOR_WHITE);
-    SH1107_GotoXY(116, VLT_UNIT_Y);
-    SH1107_Puts("V", &Font_7x10, SH1107_COLOR_WHITE);
-
-    SH1107_DrawLine(0, VLT_LINE_Y, OLED_W - 1, VLT_LINE_Y, SH1107_COLOR_WHITE);
-
-    SH1107_DrawFilledRectangle(0, CUR_LABEL_Y, OLED_W, CUR_LINE_Y - CUR_LABEL_Y + 1,
-                               SH1107_COLOR_BLACK);
-    SH1107_GotoXY(3, CUR_LABEL_Y);
-    SH1107_Puts("CURRENT", &Font_7x10, SH1107_COLOR_WHITE);
-
-    FloatToStr(i, numBuf, 2);
-    SH1107_GotoXY(3, CUR_VALUE_Y);
-    SH1107_Puts(numBuf, &Font_11x18, SH1107_COLOR_WHITE);
-    SH1107_GotoXY(116, CUR_UNIT_Y);
-    SH1107_Puts("A", &Font_7x10, SH1107_COLOR_WHITE);
-
-    SH1107_DrawLine(0, CUR_LINE_Y, OLED_W - 1, CUR_LINE_Y, SH1107_COLOR_WHITE);
-
-    SH1107_DrawFilledRectangle(0, FTR_LINE_Y + 1, OLED_W,
-                               OLED_H - FTR_LINE_Y - 1, SH1107_COLOR_BLACK);
-
-    SH1107_GotoXY(3, FTR_LABEL_Y);
-    SH1107_Puts("LOGGED", &Font_7x10, SH1107_COLOR_WHITE);
-    snprintf(lineBuf, sizeof(lineBuf), "%06lu", (unsigned long)logTotalSamples);
-    SH1107_GotoXY(3, FTR_VALUE_Y);
-    SH1107_Puts(lineBuf, &Font_7x10, SH1107_COLOR_WHITE);
-
-    SH1107_DrawLine(FTR_COL_SEP_X, FTR_LINE_Y + 1, FTR_COL_SEP_X,
-                    OLED_H - 1, SH1107_COLOR_WHITE);
-
-    SH1107_GotoXY(67, FTR_LABEL_Y);
-    SH1107_Puts("SD CARD", &Font_7x10, SH1107_COLOR_WHITE);
-    SH1107_GotoXY(67, FTR_VALUE_Y);
-    SH1107_Puts(sdStatusStr, &Font_7x10, SH1107_COLOR_WHITE);
-
-    SH1107_UpdateScreen();
-}
-
-static void DrawCalibratingScreen(uint16_t samplesDone, float latestOffset)
-{
-    const uint16_t BAR_X = 3, BAR_Y = 58, BAR_W = 122, BAR_H = 12;
-    char offBuf[12];
-
-    SH1107_Fill(SH1107_COLOR_BLACK);
-
-    SH1107_GotoXY(15, HDR_Y);
-    SH1107_Puts("CALIBRATING", &Font_7x10, SH1107_COLOR_WHITE);
-    SH1107_DrawLine(0, HDR_LINE_Y, OLED_W - 1, HDR_LINE_Y, SH1107_COLOR_WHITE);
-
-    SH1107_GotoXY(3, 18);
-    SH1107_Puts("No load on sensor", &Font_7x10, SH1107_COLOR_WHITE);
-    SH1107_GotoXY(3, 29);
-    SH1107_Puts("input. Zero amps.", &Font_7x10, SH1107_COLOR_WHITE);
-    SH1107_DrawLine(0, 42, OLED_W - 1, 42, SH1107_COLOR_WHITE);
-
-    SH1107_GotoXY(3, 46);
-    SH1107_Puts("PROGRESS", &Font_7x10, SH1107_COLOR_WHITE);
-
-    SH1107_DrawRectangle(BAR_X, BAR_Y, BAR_W, BAR_H, SH1107_COLOR_WHITE);
-
-    uint16_t fillW = (uint16_t)((uint32_t)samplesDone * (BAR_W - 2) / AUTOZERO_SAMPLES);
-    if (fillW > 0) {
-        SH1107_DrawFilledRectangle(BAR_X + 1, BAR_Y + 1, fillW, BAR_H - 2,
-                                   SH1107_COLOR_WHITE);
+    if (v_pack <= V[0])   return 0.0f;
+    if (v_pack >= V[N-1]) return 1.0f;
+    for (uint8_t k = 1; k < N; k++) {
+        if (v_pack < V[k])
+            return S[k-1] + (S[k] - S[k-1]) * (v_pack - V[k-1]) / (V[k] - V[k-1]);
     }
-
-    uint8_t pct = (uint8_t)((uint32_t)samplesDone * 100 / AUTOZERO_SAMPLES);
-    snprintf(lineBuf, sizeof(lineBuf), "%3u%%", pct);
-    SH1107_GotoXY(50, 74);
-    SH1107_Puts(lineBuf, &Font_7x10, SH1107_COLOR_WHITE);
-
-    SH1107_DrawLine(0, 86, OLED_W - 1, 86, SH1107_COLOR_WHITE);
-
-    SH1107_GotoXY(3, 90);
-    SH1107_Puts("Sampling ADC2...", &Font_7x10, SH1107_COLOR_WHITE);
-
-    if (samplesDone > 0) {
-        FloatToStr(latestOffset, offBuf, 4);
-        snprintf(lineBuf, sizeof(lineBuf), "Offset: %s V", offBuf);
-    } else {
-        snprintf(lineBuf, sizeof(lineBuf), "Offset: -.---- V");
-    }
-    SH1107_GotoXY(3, 101);
-    SH1107_Puts(lineBuf, &Font_7x10, SH1107_COLOR_WHITE);
-
-    SH1107_UpdateScreen();
-}
-
-static void DrawZeroDoneScreen(float offset)
-{
-    char offBuf[12];
-
-    SH1107_Fill(SH1107_COLOR_BLACK);
-
-    SH1107_GotoXY(8, HDR_Y);
-    SH1107_Puts("ZERO COMPLETE", &Font_7x10, SH1107_COLOR_WHITE);
-    SH1107_DrawLine(0, HDR_LINE_Y, OLED_W - 1, HDR_LINE_Y, SH1107_COLOR_WHITE);
-
-    SH1107_GotoXY(3, 18);
-    SH1107_Puts("Offset captured:", &Font_7x10, SH1107_COLOR_WHITE);
-
-    FloatToStr(offset, offBuf, 4);
-    SH1107_GotoXY(3, 32);
-    SH1107_Puts(offBuf, &Font_11x18, SH1107_COLOR_WHITE);
-    SH1107_GotoXY(72, 40);
-    SH1107_Puts("V", &Font_7x10, SH1107_COLOR_WHITE);
-
-    SH1107_DrawLine(0, 55, OLED_W - 1, 55, SH1107_COLOR_WHITE);
-
-    snprintf(lineBuf, sizeof(lineBuf), "Samples : %u",
-             (unsigned)(AUTOZERO_SAMPLES * ADC_OVERSAMPLE_COUNT));
-    SH1107_GotoXY(3, 59);
-    SH1107_Puts(lineBuf, &Font_7x10, SH1107_COLOR_WHITE);
-    SH1107_GotoXY(3, 70);
-    SH1107_Puts("Quality : GOOD", &Font_7x10, SH1107_COLOR_WHITE);
-
-    SH1107_DrawLine(0, 83, OLED_W - 1, 83, SH1107_COLOR_WHITE);
-
-    SH1107_GotoXY(3, 88);
-    SH1107_Puts("Connect load now.", &Font_7x10, SH1107_COLOR_WHITE);
-    SH1107_GotoXY(3, 99);
-    SH1107_Puts("Starting in 1.5s", &Font_7x10, SH1107_COLOR_WHITE);
-
-    SH1107_DrawLine(0, 113, OLED_W - 1, 113, SH1107_COLOR_WHITE);
-
-    SH1107_GotoXY(8, 117);
-    SH1107_Puts("SOC MONITORING", &Font_7x10, SH1107_COLOR_WHITE);
+    return 1.0f;
 }
 
 static void AutoZero_Compute(void)
@@ -800,19 +720,11 @@ static void AutoZero_Compute(void)
     double   acc   = 0.0;
     uint16_t valid = 0;
 
-    DrawCalibratingScreen(0, 0.0f);
-
     for (uint16_t s = 1; s <= AUTOZERO_SAMPLES; s++) {
-        uint16_t raw  = ADC_ReadAveraged(&hadc2);
+        uint16_t raw  = ADC_ReadChannelAveraged(&hadc2, ADC_CHANNEL_1);
         float    vRaw = (float)raw * ADC_VREF / ADC_MAX_COUNT;
         acc += (double)vRaw;
         valid++;
-
-        float runningOffset = (float)(acc / valid);
-
-        if ((s % 25) == 0 || s == AUTOZERO_SAMPLES) {
-            DrawCalibratingScreen(s, runningOffset);
-        }
 
         HAL_Delay(10);
     }
@@ -868,7 +780,7 @@ static uint8_t SD_Logger_Init(void)
 
     if (f_size(&logFile) == 0) {
         UINT bw;
-        const char *hdr = "Timestamp_s,Voltage_V,Current_A,SoC_pct\r\n";
+        const char *hdr = "Timestamp_s,Voltage_V,Current_A,Power_W,SoC_pct,SoH_pct\r\n";
         f_write(&logFile, hdr, strlen(hdr), &bw);
         f_sync(&logFile);
     } else {
@@ -895,15 +807,18 @@ static void SD_Logger_AddSample(float v, float i, float soc_pct)
     }
 
     uint32_t elapsed_s = (now - logTickOffset) / 1000UL;
+    float power_w = v * i;
 
-    char vStr[12], iStr[12], socStr[12];
+    char vStr[12], iStr[12], pwrStr[12], socStr[12], sohStr[12];
     FloatToStr(v, vStr, 3);
     FloatToStr(i, iStr, 3);
+    FloatToStr(power_w, pwrStr, 2);
     FloatToStr(soc_pct, socStr, 2);
+    FloatToStr(soh_pct, sohStr, 2);
 
     int n = snprintf(&logChunk[logChunkLen], sizeof(logChunk) - logChunkLen,
-                      "%lu,%s,%s,%s\r\n",
-                      (unsigned long)elapsed_s, vStr, iStr, socStr);
+                      "%lu,%s,%s,%s,%s,%s\r\n",
+                      (unsigned long)elapsed_s, vStr, iStr, pwrStr, socStr, sohStr);
 
     if (n > 0) logChunkLen += (uint16_t)n;
 
@@ -957,20 +872,22 @@ static void EKF_SOC_ConfigureModel(EKF_SOC_HandleTypeDef *hekf)
     hekf->C0[0] = -1.0f;
     hekf->C0[1] =  0.0f;
 
-    /* OCV pack 3S 18650 (9.00 V @0% .. 12.60 V @100%), polinomial orde 5 hasil fitting
-       kurva tipikal Li-ion NMC per sel x3. Koefisien urut dari pangkat tertinggi. */
-    hekf->ocvCoeffs[0] = 48.235311f;   hekf->ocvCoeffs[1] = -141.179822f;
-    hekf->ocvCoeffs[2] = 155.693715f;  hekf->ocvCoeffs[3] = -78.535183f;
-    hekf->ocvCoeffs[4] = 19.356109f;   hekf->ocvCoeffs[5] = 9.041960f;
+    /* FIX: OCV pack LiFePO4 4S 100Ah (tegangan istirahat 12.0 V @0% .. 13.55 V @100%),
+       polinomial orde 5, koefisien urut dari pangkat tertinggi.
+       Plateau tengah datar (turunan kecil) -> koreksi tegangan lemah,
+       coulomb counting dominan (disengaja). */
+    hekf->ocvCoeffs[0] = 41.826923f;   hekf->ocvCoeffs[1] = -114.678030f;
+    hekf->ocvCoeffs[2] = 116.864073f;  hekf->ocvCoeffs[3] = -54.533872f;
+    hekf->ocvCoeffs[4] = 12.062550f;   hekf->ocvCoeffs[5] = 12.017919f;
     hekf->ocvOrder     = 5;
-    hekf->dOcvCoeffs[0] = 241.176557f; hekf->dOcvCoeffs[1] = -564.719290f;
-    hekf->dOcvCoeffs[2] = 467.081144f; hekf->dOcvCoeffs[3] = -157.070367f;
-    hekf->dOcvCoeffs[4] = 19.356109f;
+    hekf->dOcvCoeffs[0] = 209.134615f; hekf->dOcvCoeffs[1] = -458.712121f;
+    hekf->dOcvCoeffs[2] = 350.592220f; hekf->dOcvCoeffs[3] = -109.067745f;
+    hekf->dOcvCoeffs[4] = 12.062550f;
     hekf->dOcvOrder     = 4;
 
     hekf->Q[0] = 0.000001f; hekf->Q[1] = 0.0f;
-    hekf->Q[2] = 0.0f;      hekf->Q[3] = 1.0e-10f;   /* FIX: derau proses SOC kecil agar coulomb counting dominan, tegangan hanya koreksi pelan */
-    hekf->R    = 0.01f;      /* FIX: dinaikkan agar SOC tidak terlalu mengikuti noise tegangan */
+    hekf->Q[2] = 0.0f;      hekf->Q[3] = 1.0e-10f;   /* derau proses SOC kecil agar coulomb counting dominan, tegangan hanya koreksi pelan */
+    hekf->R    = 0.01f;      /* dinaikkan agar SOC tidak terlalu mengikuti noise tegangan */
 
     hekf->P[0] = 0.0001f; hekf->P[1] = 0.0f;
     hekf->P[2] = 0.0f;    hekf->P[3] = 0.01f;

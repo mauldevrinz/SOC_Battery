@@ -1,0 +1,6 @@
+// Program.s - Global Initialization
+// Runs once when Nextion powers on
+dim=100  // Full brightness
+baud=9600  // Match STM32 UART baud rate
+thup=1  // Enable touch coordinate stream on release
+page 0  // Start at Home page

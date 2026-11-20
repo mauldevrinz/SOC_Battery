@@ -23,6 +23,9 @@ static int32_t s_last_measurement[2] = {-1, -1};
 static int8_t s_last_measurement_sign[2] = {0, 0};
 static char s_last_footer[24];
 static char s_last_sd_label[12];
+static int16_t s_last_soc_display = -1;
+static int16_t s_last_soh_display = -1;
+static int16_t s_last_bat_display = -1;
 
 void TJC_HMI_Init(UART_HandleTypeDef *huart)
 {
@@ -35,6 +38,15 @@ void TJC_HMI_Init(UART_HandleTypeDef *huart)
     s_last_measurement_sign[1] = 0;
     s_last_footer[0] = '\0';
     s_last_sd_label[0] = '\0';
+    s_last_soc_display = -1;
+    s_last_soh_display = -1;
+    s_last_bat_display = -1;
+
+    /* Matikan touch event & respon touch pabrikan */
+    (void)TJC_HMI_SendCommand("bkcmd=0");
+    (void)TJC_HMI_SendCommand("tsw 255,0");
+    (void)TJC_HMI_SendCommand("thup=0");
+    (void)TJC_HMI_SendCommand("sendxy=0");
 }
 
 HAL_StatusTypeDef TJC_HMI_SendCommand(const char *command)
@@ -99,6 +111,35 @@ static HAL_StatusTypeDef TJC_HMI_FillRect(uint16_t x, uint16_t y,
     return TJC_HMI_SendCommand(command);
 }
 
+/* Menggambar simbol '%' menggunakan elemen grafis vektor primitif agar selalu muncul
+   meskipun font HMI tidak menyertakan karakter ASCII '%' */
+static HAL_StatusTypeDef TJC_HMI_DrawPercentSymbol(uint16_t x, uint16_t y, uint16_t color)
+{
+    char command[48];
+    HAL_StatusTypeDef status;
+
+    /* Lingkaran atas: kotak kecil 4x4 */
+    status = TJC_HMI_FillRect(x, y, 4U, 4U, color);
+    if (status != HAL_OK) return status;
+
+    /* Garis miring persen: dari (x+1, y+13) ke (x+9, y) */
+    (void)snprintf(command, sizeof(command), "line %u,%u,%u,%u,%u",
+                   (unsigned)(x + 1U), (unsigned)(y + 13U),
+                   (unsigned)(x + 9U), (unsigned)y, (unsigned)color);
+    status = TJC_HMI_SendCommand(command);
+    if (status != HAL_OK) return status;
+
+    /* Garis tebal ganda */
+    (void)snprintf(command, sizeof(command), "line %u,%u,%u,%u,%u",
+                   (unsigned)(x + 2U), (unsigned)(y + 13U),
+                   (unsigned)(x + 10U), (unsigned)y, (unsigned)color);
+    status = TJC_HMI_SendCommand(command);
+    if (status != HAL_OK) return status;
+
+    /* Lingkaran bawah: kotak kecil 4x4 */
+    return TJC_HMI_FillRect((uint16_t)(x + 7U), (uint16_t)(y + 9U), 4U, 4U, color);
+}
+
 /* Draw minus and decimal comma as graphics so missing font glyphs cannot hide them. */
 static HAL_StatusTypeDef TJC_HMI_DrawMeasurement(float value, uint16_t card_x,
                                                   uint16_t y, const char *unit)
@@ -122,73 +163,69 @@ static HAL_StatusTypeDef TJC_HMI_DrawMeasurement(float value, uint16_t card_x,
         return TJC_HMI_DrawText((uint16_t)(card_x + 106U), y, 26U, 45U, 1U,
                                 HMI_COLOR_TEXT, HMI_COLOR_CARD, 0U, unit);
     }
-    magnitude = value < 0.0f ? -value : value;
+    magnitude = value;
+    if (negative) magnitude = -magnitude;
     scaled = (int32_t)(magnitude * 100.0f + 0.5f);
-    if (s_last_measurement[index] == scaled &&
-        s_last_measurement_sign[index] == negative)
+
+    if (s_last_measurement[index] == scaled && s_last_measurement_sign[index] == negative) {
         return HAL_OK;
+    }
+    s_last_measurement[index] = scaled;
+    s_last_measurement_sign[index] = negative;
+
     (void)snprintf(whole, sizeof(whole), "%ld", (long)(scaled / 100));
     (void)snprintf(fraction, sizeof(fraction), "%02ld", (long)(scaled % 100));
 
-    if (s_last_measurement[index] < 0 ||
-        s_last_measurement_sign[index] != negative) {
-        status = TJC_HMI_FillRect((uint16_t)(card_x + 3U), (uint16_t)(y + 19U),
-                                  9U, 5U, HMI_COLOR_CARD);
-        if (status != HAL_OK) return status;
-        if (negative) {
-            status = TJC_HMI_FillRect((uint16_t)(card_x + 4U), (uint16_t)(y + 21U),
-                                      7U, 2U, HMI_COLOR_TEXT);
-            if (status != HAL_OK) return status;
-        }
-    }
+    status = TJC_HMI_FillRect((uint16_t)(card_x + 3U), (uint16_t)(y + 2U),
+                              130U, 41U, HMI_COLOR_CARD);
+    if (status != HAL_OK) return status;
 
-    if (s_last_measurement[index] != scaled) {
-        status = TJC_HMI_DrawText((uint16_t)(card_x + 14U), y, 50U, 45U, 1U,
-                                  HMI_COLOR_TEXT, HMI_COLOR_CARD, 2U, whole);
-        if (status != HAL_OK) return status;
-        status = TJC_HMI_DrawText((uint16_t)(card_x + 74U), y, 32U, 45U, 1U,
-                                  HMI_COLOR_TEXT, HMI_COLOR_CARD, 0U, fraction);
+    if (negative) {
+        status = TJC_HMI_FillRect((uint16_t)(card_x + 6U), (uint16_t)(y + 20U),
+                                  8U, 3U, HMI_COLOR_TEXT);
         if (status != HAL_OK) return status;
     }
 
-    if (s_last_measurement[index] < 0) {
-        status = TJC_HMI_FillRect((uint16_t)(card_x + 65U), (uint16_t)(y + 29U),
-                                  8U, 13U, HMI_COLOR_CARD);
-        if (status != HAL_OK) return status;
-        status = TJC_HMI_FillRect((uint16_t)(card_x + 66U), (uint16_t)(y + 31U),
-                                  4U, 4U, HMI_COLOR_TEXT);
-        if (status != HAL_OK) return status;
-        status = TJC_HMI_FillRect((uint16_t)(card_x + 68U), (uint16_t)(y + 34U),
-                                  2U, 4U, HMI_COLOR_TEXT);
-        if (status != HAL_OK) return status;
-        status = TJC_HMI_DrawText((uint16_t)(card_x + 108U), y, 24U, 45U, 1U,
-                                  HMI_COLOR_TEXT, HMI_COLOR_CARD, 0U, unit);
-        if (status != HAL_OK) return status;
-    }
+    status = TJC_HMI_DrawText((uint16_t)(card_x + 14U), y, 46U, 45U, 1U,
+                              HMI_COLOR_TEXT, HMI_COLOR_CARD, 2U, whole);
+    if (status != HAL_OK) return status;
 
-    s_last_measurement[index] = scaled;
-    s_last_measurement_sign[index] = negative;
-    return HAL_OK;
+    status = TJC_HMI_FillRect((uint16_t)(card_x + 62U), (uint16_t)(y + 30U),
+                              4U, 4U, HMI_COLOR_TEXT);
+    if (status != HAL_OK) return status;
+    status = TJC_HMI_FillRect((uint16_t)(card_x + 61U), (uint16_t)(y + 34U),
+                              3U, 4U, HMI_COLOR_TEXT);
+    if (status != HAL_OK) return status;
+
+    status = TJC_HMI_DrawText((uint16_t)(card_x + 68U), y, 36U, 45U, 1U,
+                              HMI_COLOR_TEXT, HMI_COLOR_CARD, 0U, fraction);
+    if (status != HAL_OK) return status;
+
+    return TJC_HMI_DrawText((uint16_t)(card_x + 106U), y, 26U, 45U, 1U,
+                            HMI_COLOR_TEXT, HMI_COLOR_CARD, 0U, unit);
 }
 
+/* Header Status (CALIB / START / READY / INIT): Posisi di tengah (x=115..205, y=4) */
 HAL_StatusTypeDef TJC_HMI_SetStatus(const char *status_text)
 {
-    uint16_t text_color;
+    uint16_t text_color = HMI_COLOR_TEXT;
     HAL_StatusTypeDef status;
 
     if (status_text == NULL) status_text = "UNKNOWN";
-    if (s_last_status[0] != '\0' && strcmp(s_last_status, status_text) == 0)
-        return HAL_OK;
-    if (strncmp(status_text, "READY", 5U) == 0)
-        text_color = HMI_COLOR_GREEN;
-    else if (strncmp(status_text, "CALIB", 5U) == 0)
-        text_color = HMI_COLOR_RED;
-    else
-        text_color = HMI_COLOR_TEXT;
 
-    status = TJC_HMI_FillRect(229U, 2U, 79U, 34U, HMI_COLOR_HEADER);
+    if (strcmp(status_text, "READY") == 0) text_color = HMI_COLOR_GREEN;
+    else if (strcmp(status_text, "INIT") == 0) text_color = HMI_COLOR_ACCENT;
+    else if (strcmp(status_text, "CALIB") == 0) text_color = HMI_COLOR_ACCENT;
+    else if (strcmp(status_text, "START") == 0) text_color = HMI_COLOR_GREEN;
+    else text_color = HMI_COLOR_RED;
+
+    if (s_screen_initialized && (strcmp(s_last_status, status_text) == 0)) {
+        return HAL_OK;
+    }
+
+    status = TJC_HMI_FillRect(115, 4, 90, 30, HMI_COLOR_HEADER);
     if (status != HAL_OK) return status;
-    status = TJC_HMI_DrawText(230, 2, 77, 34, 1, text_color,
+    status = TJC_HMI_DrawText(115, 4, 90, 30, 1, text_color,
                               HMI_COLOR_HEADER, 1, status_text);
     if (status == HAL_OK) {
         (void)snprintf(s_last_status, sizeof(s_last_status), "%s", status_text);
@@ -197,7 +234,8 @@ HAL_StatusTypeDef TJC_HMI_SetStatus(const char *status_text)
 }
 
 HAL_StatusTypeDef TJC_HMI_DrawMonitor(float voltage, float current,
-                                      float soc_percent,
+                                      float soc_percent, float soh_percent,
+                                      uint8_t sys_bat_percent,
                                       uint32_t logged_samples,
                                       const char *sd_status,
                                       const char *run_status)
@@ -206,6 +244,7 @@ HAL_StatusTypeDef TJC_HMI_DrawMonitor(float voltage, float current,
     char sd_label[12];
     char footer[24];
     uint8_t soc_display;
+    uint8_t soh_display;
     HAL_StatusTypeDef status;
 
     if (sd_status == NULL) sd_status = "UNKNOWN";
@@ -220,37 +259,60 @@ HAL_StatusTypeDef TJC_HMI_DrawMonitor(float voltage, float current,
     else (void)snprintf(sd_label, sizeof(sd_label), "SD ERR");
 
     if (!s_screen_initialized) {
+        /* Nonaktifkan touch pabrikan agar sentuhan tidak memicu pindah halaman default */
+        (void)TJC_HMI_SendCommand("tsw 255,0");
+        (void)TJC_HMI_SendCommand("thup=0");
+        (void)TJC_HMI_SendCommand("sendxy=0");
+
         status = TJC_HMI_SendCommand("cls 0");
         if (status != HAL_OK) return status;
         status = TJC_HMI_FillRect(0U, 0U, 320U, 240U, HMI_COLOR_BG);
         if (status != HAL_OK) return status;
         status = TJC_HMI_SendCommand("line 12,37,308,37,31");
         if (status != HAL_OK) return status;
-        status = TJC_HMI_DrawText(12, 2, 210, 34, 1, HMI_COLOR_TEXT, HMI_COLOR_HEADER, 0, "SOC BATTERY");
+        
+        /* Header:
+           - Kiri  (x=12..110)  : SOC LFP
+           - Tengah(x=115..205) : Status (INIT / CALIB / READY)
+           - Kanan (x=210..308) : BAT xx%
+        */
+        status = TJC_HMI_DrawText(12, 4, 100, 30, 1, HMI_COLOR_TEXT, HMI_COLOR_HEADER, 0, "SOC LFP");
         if (status != HAL_OK) return status;
+        
+        /* Kotak kartu: Voltage (kiri atas), Current (kanan atas), SOC/SOH Container (bawah) */
         status = TJC_HMI_DrawBox(12, 48, 144, 88, HMI_COLOR_CARD);
         if (status != HAL_OK) return status;
         status = TJC_HMI_DrawBox(164, 48, 144, 88, HMI_COLOR_CARD);
         if (status != HAL_OK) return status;
         status = TJC_HMI_DrawBox(12, 145, 296, 76, HMI_COLOR_CARD);
         if (status != HAL_OK) return status;
-        status = TJC_HMI_DrawText(24, 48, 124, 30, 1, HMI_COLOR_TEXT, HMI_COLOR_CARD, 0, "VOLTAGE");
+        
+        /* Label teks di dalam kotak */
+        status = TJC_HMI_DrawText(24, 52, 120, 24, 1, HMI_COLOR_TEXT, HMI_COLOR_CARD, 0, "VOLTAGE");
         if (status != HAL_OK) return status;
-        status = TJC_HMI_DrawText(176, 48, 124, 30, 1, HMI_COLOR_TEXT, HMI_COLOR_CARD, 0, "CURRENT");
+        status = TJC_HMI_DrawText(176, 52, 120, 24, 1, HMI_COLOR_TEXT, HMI_COLOR_CARD, 0, "CURRENT");
         if (status != HAL_OK) return status;
-        status = TJC_HMI_DrawText(24, 145, 120, 32, 1, HMI_COLOR_TEXT, HMI_COLOR_CARD, 0, "SOC");
+        status = TJC_HMI_DrawText(24, 150, 50, 26, 1, HMI_COLOR_TEXT, HMI_COLOR_CARD, 0, "SOC");
         if (status != HAL_OK) return status;
-        status = TJC_HMI_FillRect(274U, 153U, 5U, 5U, HMI_COLOR_TEXT);
+        status = TJC_HMI_DrawText(160, 150, 50, 26, 1, HMI_COLOR_TEXT, HMI_COLOR_CARD, 0, "SOH");
         if (status != HAL_OK) return status;
-        status = TJC_HMI_SendCommand("line 276,170,287,153,65535");
+        status = TJC_HMI_DrawText(24, 185, 150, 28, 1, HMI_COLOR_TEXT, HMI_COLOR_CARD, 0, "LOG: 0");
         if (status != HAL_OK) return status;
-        status = TJC_HMI_FillRect(284U, 164U, 5U, 5U, HMI_COLOR_TEXT);
-        if (status != HAL_OK) return status;
-        status = TJC_HMI_DrawText(24, 184, 150, 32, 1, HMI_COLOR_TEXT, HMI_COLOR_CARD, 0, "LOG: 0");
-        if (status != HAL_OK) return status;
-        status = TJC_HMI_DrawText(184, 184, 112, 32, 1, HMI_COLOR_TEXT, HMI_COLOR_CARD, 0, sd_label);
+        status = TJC_HMI_DrawText(184, 185, 112, 28, 1, HMI_COLOR_TEXT, HMI_COLOR_CARD, 0, sd_label);
         if (status != HAL_OK) return status;
         s_screen_initialized = 1U;
+    }
+
+    /* Update System Battery status in header: Pojok Kanan (x = 210 .. 308, y = 4) */
+    if (s_last_bat_display != (int16_t)sys_bat_percent) {
+        s_last_bat_display = (int16_t)sys_bat_percent;
+        (void)snprintf(value, sizeof(value), "BAT %u", sys_bat_percent);
+        uint16_t bat_color = (sys_bat_percent >= 20) ? HMI_COLOR_GREEN : HMI_COLOR_RED;
+        (void)TJC_HMI_FillRect(210, 4, 98, 30, HMI_COLOR_HEADER);
+        /* Teks BAT xx rata kanan hingga x=293 */
+        (void)TJC_HMI_DrawText(210, 4, 83, 30, 1, bat_color, HMI_COLOR_HEADER, 2, value);
+        /* Simbol grafis % di x=296, y=10 */
+        (void)TJC_HMI_DrawPercentSymbol(296, 10, bat_color);
     }
 
     status = TJC_HMI_DrawMeasurement(voltage, 12U, 78U, "V");
@@ -258,25 +320,60 @@ HAL_StatusTypeDef TJC_HMI_DrawMonitor(float voltage, float current,
     status = TJC_HMI_DrawMeasurement(current, 164U, 78U, "A");
     if (status != HAL_OK) return status;
 
-    if (!isfinite(soc_percent)) (void)snprintf(value, sizeof(value), "ERR");
-    else {
+    /* SOC display */
+    if (!isfinite(soc_percent)) {
+        if (s_last_soc_display != -2) {
+            s_last_soc_display = -2;
+            (void)TJC_HMI_FillRect(76, 150, 70, 28, HMI_COLOR_CARD);
+            (void)TJC_HMI_DrawText(76, 150, 70, 28, 1, HMI_COLOR_RED, HMI_COLOR_CARD, 0, "ERR");
+        }
+    } else {
         if (soc_percent < 0.0f) soc_display = 0U;
         else if (soc_percent > 100.0f) soc_display = 100U;
         else soc_display = (uint8_t)(soc_percent + 0.5f);
-        (void)snprintf(value, sizeof(value), "%u", soc_display);
+
+        if (s_last_soc_display != (int16_t)soc_display) {
+            s_last_soc_display = (int16_t)soc_display;
+            (void)snprintf(value, sizeof(value), "%u", soc_display);
+            (void)TJC_HMI_FillRect(76, 150, 70, 28, HMI_COLOR_CARD);
+            (void)TJC_HMI_DrawText(76, 150, 40, 28, 1, HMI_COLOR_GREEN, HMI_COLOR_CARD, 0, value);
+            uint16_t pct_x = (soc_display >= 100) ? 122 : ((soc_display >= 10) ? 110 : 98);
+            (void)TJC_HMI_DrawPercentSymbol(pct_x, 156, HMI_COLOR_GREEN);
+        }
     }
-    status = TJC_HMI_DrawText(190, 145, 67, 34, 1, HMI_COLOR_TEXT, HMI_COLOR_CARD, 2, value);
-    if (status != HAL_OK) return status;
+
+    /* SOH display */
+    if (!isfinite(soh_percent)) {
+        if (s_last_soh_display != -2) {
+            s_last_soh_display = -2;
+            (void)TJC_HMI_FillRect(215, 150, 70, 28, HMI_COLOR_CARD);
+            (void)TJC_HMI_DrawText(215, 150, 70, 28, 1, HMI_COLOR_RED, HMI_COLOR_CARD, 0, "ERR");
+        }
+    } else {
+        if (soh_percent < 0.0f) soh_display = 0U;
+        else if (soh_percent > 100.0f) soh_display = 100U;
+        else soh_display = (uint8_t)(soh_percent + 0.5f);
+
+        if (s_last_soh_display != (int16_t)soh_display) {
+            s_last_soh_display = (int16_t)soh_display;
+            (void)snprintf(value, sizeof(value), "%u", soh_display);
+            uint16_t soh_color = (soh_display >= 80) ? HMI_COLOR_GREEN : HMI_COLOR_RED;
+            (void)TJC_HMI_FillRect(215, 150, 70, 28, HMI_COLOR_CARD);
+            (void)TJC_HMI_DrawText(215, 150, 40, 28, 1, soh_color, HMI_COLOR_CARD, 0, value);
+            uint16_t pct_x = (soh_display >= 100) ? 261 : ((soh_display >= 10) ? 249 : 237);
+            (void)TJC_HMI_DrawPercentSymbol(pct_x, 156, soh_color);
+        }
+    }
 
     (void)snprintf(footer, sizeof(footer), "LOG: %lu", (unsigned long)logged_samples);
     if (strcmp(s_last_footer, footer) != 0) {
-        status = TJC_HMI_DrawText(24, 184, 150, 32, 1, HMI_COLOR_TEXT,
+        status = TJC_HMI_DrawText(24, 185, 150, 28, 1, HMI_COLOR_TEXT,
                                   HMI_COLOR_CARD, 0, footer);
         if (status != HAL_OK) return status;
         (void)snprintf(s_last_footer, sizeof(s_last_footer), "%s", footer);
     }
     if (strcmp(s_last_sd_label, sd_label) != 0) {
-        status = TJC_HMI_DrawText(184, 184, 112, 32, 1, HMI_COLOR_TEXT,
+        status = TJC_HMI_DrawText(184, 185, 112, 28, 1, HMI_COLOR_TEXT,
                                   HMI_COLOR_CARD, 0, sd_label);
         if (status != HAL_OK) return status;
         (void)snprintf(s_last_sd_label, sizeof(s_last_sd_label), "%s", sd_label);

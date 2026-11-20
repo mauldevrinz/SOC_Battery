@@ -1,0 +1,493 @@
+#!/usr/bin/env python3
+"""
+===========================================================================
+ BIMA SOC LFP Analyzer - Nextion/TJC HMI Project Generator
+ Generates a complete Nextion Editor project file (.HMI) for the
+ SOC_PROTO battery analyzer firmware.
+ 
+ DISPLAY: 320x240 (2.4" / 2.8" TFT, Basic series)
+ PAGES:   7 pages (page0..page6)
+===========================================================================
+ USAGE:
+   python generate_hmi.py
+   
+ Output: BIMA_SOC_LFP.HMI  (open in Nextion Editor / USART HMI)
+===========================================================================
+"""
+
+import json
+import os
+
+# ─── Color constants (RGB565) ─────────────────────────────────────────
+BLACK   = 0
+WHITE   = 65535
+BLUE    = 31
+GREEN   = 2016
+RED     = 63488
+GRAY    = 33808
+DKGRAY  = 16904
+CYAN    = 2047
+YELLOW  = 65504
+
+# ─── Project structure ────────────────────────────────────────────────
+# Since .HMI is a proprietary binary, we generate a complete
+# Nextion Instruction Set script that can be pasted into Nextion Editor
+# OR we create a minimal valid HMI JSON (for newer USART HMI editors).
+# 
+# PRACTICAL APPROACH: Generate step-by-step instructions + a program.s
+# initialization script that can run from Page 0's Preinitialize event.
+
+def generate_nextion_instructions():
+    """Generate the complete Nextion Editor setup instructions as a
+    ready-to-use guide with exact component properties."""
+    
+    pages = []
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # PAGE 0: HOME SCREEN
+    # ═══════════════════════════════════════════════════════════════════
+    p0 = {
+        "id": 0,
+        "name": "page0",
+        "title": "HOME",
+        "bg_color": BLACK,
+        "components": [
+            # Header
+            {"type": "Text", "objname": "tTitle", "x": 5, "y": 2, "w": 160, "h": 28,
+             "txt": "BIMA SOC LFP", "font": 1, "pco": WHITE, "bco": BLACK, "xcen": 0, "ycen": 1},
+            
+            # Internal battery (header right)
+            {"type": "Text", "objname": "tCharge", "x": 168, "y": 2, "w": 40, "h": 28,
+             "txt": "BAT", "font": 0, "pco": GREEN, "bco": BLACK, "xcen": 2, "ycen": 1},
+            {"type": "Text", "objname": "tVbatInt", "x": 210, "y": 2, "w": 50, "h": 14,
+             "txt": "4.12", "font": 0, "pco": GREEN, "bco": BLACK, "xcen": 2, "ycen": 1},
+            {"type": "Progress", "objname": "jBatInt", "x": 210, "y": 18, "w": 50, "h": 10,
+             "val": 85, "pco": GREEN, "bco": DKGRAY},
+            {"type": "Text", "objname": "tStatus", "x": 262, "y": 2, "w": 55, "h": 28,
+             "txt": "READY", "font": 0, "pco": GREEN, "bco": BLACK, "xcen": 2, "ycen": 1},
+            
+            # Voltage card
+            {"type": "Text", "objname": "tVlbl", "x": 12, "y": 38, "w": 140, "h": 20,
+             "txt": "VOLTAGE (LFP)", "font": 0, "pco": BLUE, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tV", "x": 12, "y": 60, "w": 140, "h": 50,
+             "txt": "0.00", "font": 2, "pco": WHITE, "bco": BLACK, "xcen": 1, "ycen": 1},
+            
+            # Current card
+            {"type": "Text", "objname": "tIlbl", "x": 167, "y": 38, "w": 140, "h": 20,
+             "txt": "CURRENT", "font": 0, "pco": BLUE, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tI", "x": 167, "y": 60, "w": 140, "h": 50,
+             "txt": "0.00", "font": 2, "pco": WHITE, "bco": BLACK, "xcen": 1, "ycen": 1},
+            
+            # SOC section
+            {"type": "Text", "objname": "tSOClbl", "x": 12, "y": 118, "w": 80, "h": 20,
+             "txt": "SOC (EKF)", "font": 0, "pco": BLUE, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tSOC", "x": 95, "y": 118, "w": 70, "h": 20,
+             "txt": "0.0", "font": 1, "pco": WHITE, "bco": BLACK, "xcen": 2, "ycen": 1},
+            
+            # SOH section  
+            {"type": "Text", "objname": "tSOHlbl", "x": 175, "y": 118, "w": 40, "h": 20,
+             "txt": "SOH", "font": 0, "pco": BLUE, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tSOH", "x": 218, "y": 118, "w": 70, "h": 20,
+             "txt": "100.0", "font": 1, "pco": WHITE, "bco": BLACK, "xcen": 2, "ycen": 1},
+            
+            # SOC Gauge Bar
+            {"type": "Progress", "objname": "jSOC", "x": 12, "y": 142, "w": 296, "h": 16,
+             "val": 0, "pco": GREEN, "bco": DKGRAY},
+            
+            # Temp
+            {"type": "Text", "objname": "tTemplbl", "x": 12, "y": 164, "w": 50, "h": 18,
+             "txt": "TEMP:", "font": 0, "pco": GRAY, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tTemp", "x": 62, "y": 164, "w": 60, "h": 18,
+             "txt": "25.0", "font": 0, "pco": WHITE, "bco": BLACK, "xcen": 0, "ycen": 1},
+            
+            # SD & Log
+            {"type": "Text", "objname": "tSD", "x": 130, "y": 164, "w": 80, "h": 18,
+             "txt": "READY", "font": 0, "pco": GREEN, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tLog", "x": 218, "y": 164, "w": 90, "h": 18,
+             "txt": "0", "font": 0, "pco": WHITE, "bco": BLACK, "xcen": 2, "ycen": 1},
+            
+            # Navigation buttons
+            {"type": "Button", "objname": "bMenu", "id_override": 3,
+             "x": 10, "y": 190, "w": 95, "h": 42,
+             "txt": "MENU", "font": 1, "pco": WHITE, "pco2": WHITE, "bco": DKGRAY, "bco2": BLUE,
+             "send_component_id": True},
+            {"type": "Button", "objname": "bQuick", "id_override": 4,
+             "x": 112, "y": 190, "w": 95, "h": 42,
+             "txt": "QUICK", "font": 1, "pco": WHITE, "pco2": WHITE, "bco": DKGRAY, "bco2": BLUE,
+             "send_component_id": True},
+            {"type": "Button", "objname": "bAnalyze", "id_override": 5,
+             "x": 214, "y": 190, "w": 96, "h": 42,
+             "txt": "ANALYZE", "font": 1, "pco": WHITE, "pco2": WHITE, "bco": DKGRAY, "bco2": BLUE,
+             "send_component_id": True},
+        ]
+    }
+    pages.append(p0)
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # PAGE 1: MAIN MENU
+    # ═══════════════════════════════════════════════════════════════════
+    menu_items = [
+        (1, "1. HOME MONITOR"),
+        (2, "2. QUICK CHECK"),
+        (3, "3. BATTERY ANALYZE"),
+        (4, "4. BATTERY SETUP"),
+        (5, "5. DATA LOGGER"),
+        (6, "6. HISTORY & TREND"),
+    ]
+    p1_comps = [
+        {"type": "Text", "objname": "tMenuTitle", "x": 5, "y": 2, "w": 310, "h": 30,
+         "txt": "MAIN MENU", "font": 1, "pco": WHITE, "bco": BLACK, "xcen": 1, "ycen": 1},
+    ]
+    for idx, (cid, label) in enumerate(menu_items):
+        y = 38 + idx * 33
+        p1_comps.append({
+            "type": "Button", "objname": f"bM{cid}", "id_override": cid,
+            "x": 15, "y": y, "w": 290, "h": 30,
+            "txt": label, "font": 1, "pco": WHITE, "pco2": WHITE, "bco": DKGRAY, "bco2": BLUE,
+            "send_component_id": True
+        })
+    
+    p1 = {"id": 1, "name": "page1", "title": "MENU", "bg_color": BLACK, "components": p1_comps}
+    pages.append(p1)
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # PAGE 2: QUICK CHECK
+    # ═══════════════════════════════════════════════════════════════════
+    p2 = {
+        "id": 2, "name": "page2", "title": "QUICK CHECK", "bg_color": BLACK,
+        "components": [
+            {"type": "Text", "objname": "tQCtitle", "x": 5, "y": 2, "w": 310, "h": 28,
+             "txt": "QUICK CHECK", "font": 1, "pco": WHITE, "bco": BLACK, "xcen": 1, "ycen": 1},
+            
+            {"type": "Text", "objname": "lVnow", "x": 10, "y": 36, "w": 100, "h": 22,
+             "txt": "V-Now :", "font": 0, "pco": GRAY, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tVnow", "x": 110, "y": 36, "w": 80, "h": 22,
+             "txt": "0.00", "font": 1, "pco": WHITE, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "lVmin", "x": 195, "y": 36, "w": 45, "h": 22,
+             "txt": "Min:", "font": 0, "pco": GRAY, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tVmin", "x": 240, "y": 36, "w": 70, "h": 22,
+             "txt": "0.00", "font": 0, "pco": WHITE, "bco": BLACK, "xcen": 0, "ycen": 1},
+            
+            {"type": "Text", "objname": "lVmax", "x": 10, "y": 60, "w": 100, "h": 22,
+             "txt": "V-Max :", "font": 0, "pco": GRAY, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tVmax", "x": 110, "y": 60, "w": 80, "h": 22,
+             "txt": "0.00", "font": 1, "pco": WHITE, "bco": BLACK, "xcen": 0, "ycen": 1},
+            
+            {"type": "Text", "objname": "lInow", "x": 10, "y": 88, "w": 100, "h": 22,
+             "txt": "I-Now :", "font": 0, "pco": GRAY, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tInow", "x": 110, "y": 88, "w": 80, "h": 22,
+             "txt": "0.00", "font": 1, "pco": WHITE, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "lIpeak", "x": 195, "y": 88, "w": 50, "h": 22,
+             "txt": "Peak:", "font": 0, "pco": GRAY, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tIpeak", "x": 245, "y": 88, "w": 65, "h": 22,
+             "txt": "0.00", "font": 0, "pco": WHITE, "bco": BLACK, "xcen": 0, "ycen": 1},
+            
+            {"type": "Text", "objname": "lSocOcv", "x": 10, "y": 116, "w": 100, "h": 22,
+             "txt": "OCV-SoC:", "font": 0, "pco": GRAY, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tSocOcv", "x": 110, "y": 116, "w": 80, "h": 22,
+             "txt": "0.0", "font": 1, "pco": GREEN, "bco": BLACK, "xcen": 0, "ycen": 1},
+            
+            {"type": "Text", "objname": "lHold", "x": 10, "y": 140, "w": 100, "h": 22,
+             "txt": "Hold:", "font": 0, "pco": GRAY, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tHold", "x": 110, "y": 140, "w": 60, "h": 22,
+             "txt": "RUN", "font": 1, "pco": GREEN, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "lZero", "x": 175, "y": 140, "w": 55, "h": 22,
+             "txt": "Zero:", "font": 0, "pco": GRAY, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tIzero", "x": 230, "y": 140, "w": 80, "h": 22,
+             "txt": "1.690", "font": 0, "pco": WHITE, "bco": BLACK, "xcen": 0, "ycen": 1},
+            
+            # Bottom buttons
+            {"type": "Button", "objname": "bBack", "id_override": 1,
+             "x": 5, "y": 195, "w": 100, "h": 40,
+             "txt": "BACK", "font": 1, "pco": WHITE, "pco2": WHITE, "bco": DKGRAY, "bco2": RED,
+             "send_component_id": True},
+            {"type": "Button", "objname": "bHold", "id_override": 2,
+             "x": 110, "y": 195, "w": 100, "h": 40,
+             "txt": "HOLD", "font": 1, "pco": WHITE, "pco2": WHITE, "bco": DKGRAY, "bco2": YELLOW,
+             "send_component_id": True},
+            {"type": "Button", "objname": "bReset", "id_override": 3,
+             "x": 215, "y": 195, "w": 100, "h": 40,
+             "txt": "RESET", "font": 1, "pco": WHITE, "pco2": WHITE, "bco": DKGRAY, "bco2": CYAN,
+             "send_component_id": True},
+        ]
+    }
+    pages.append(p2)
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # PAGE 3: BATTERY ANALYZE
+    # ═══════════════════════════════════════════════════════════════════
+    p3 = {
+        "id": 3, "name": "page3", "title": "ANALYZE", "bg_color": BLACK,
+        "components": [
+            {"type": "Text", "objname": "tANtitle", "x": 5, "y": 2, "w": 310, "h": 28,
+             "txt": "BATTERY ANALYZE", "font": 1, "pco": WHITE, "bco": BLACK, "xcen": 1, "ycen": 1},
+            
+            {"type": "Text", "objname": "lSOcv", "x": 10, "y": 40, "w": 150, "h": 24,
+             "txt": "OCV-based SOC:", "font": 0, "pco": GRAY, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tSocOcv", "x": 165, "y": 40, "w": 140, "h": 24,
+             "txt": "0.0", "font": 1, "pco": WHITE, "bco": BLACK, "xcen": 2, "ycen": 1},
+            
+            {"type": "Text", "objname": "lSEkf", "x": 10, "y": 68, "w": 150, "h": 24,
+             "txt": "AEKF-based SOC:", "font": 0, "pco": GRAY, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tSocEkf", "x": 165, "y": 68, "w": 140, "h": 24,
+             "txt": "0.0", "font": 1, "pco": GREEN, "bco": BLACK, "xcen": 2, "ycen": 1},
+            
+            {"type": "Text", "objname": "lSoh", "x": 10, "y": 96, "w": 150, "h": 24,
+             "txt": "Battery SOH:", "font": 0, "pco": GRAY, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tSoh", "x": 165, "y": 96, "w": 140, "h": 24,
+             "txt": "100.0", "font": 1, "pco": WHITE, "bco": BLACK, "xcen": 2, "ycen": 1},
+            
+            {"type": "Text", "objname": "lR0", "x": 10, "y": 124, "w": 150, "h": 24,
+             "txt": "Int-Resistance:", "font": 0, "pco": GRAY, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tR0", "x": 165, "y": 124, "w": 140, "h": 24,
+             "txt": "0.00", "font": 1, "pco": WHITE, "bco": BLACK, "xcen": 2, "ycen": 1},
+            
+            {"type": "Text", "objname": "lPwr", "x": 10, "y": 152, "w": 80, "h": 24,
+             "txt": "Power:", "font": 0, "pco": GRAY, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tPwr", "x": 90, "y": 152, "w": 70, "h": 24,
+             "txt": "0.0", "font": 0, "pco": WHITE, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "lWh", "x": 170, "y": 152, "w": 50, "h": 24,
+             "txt": "Wh:", "font": 0, "pco": GRAY, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tEnergy", "x": 220, "y": 152, "w": 90, "h": 24,
+             "txt": "0.0", "font": 0, "pco": WHITE, "bco": BLACK, "xcen": 0, "ycen": 1},
+            
+            {"type": "Button", "objname": "bBack", "id_override": 1,
+             "x": 80, "y": 195, "w": 160, "h": 40,
+             "txt": "BACK", "font": 1, "pco": WHITE, "pco2": WHITE, "bco": DKGRAY, "bco2": RED,
+             "send_component_id": True},
+        ]
+    }
+    pages.append(p3)
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # PAGE 4: BATTERY SETUP
+    # ═══════════════════════════════════════════════════════════════════
+    p4 = {
+        "id": 4, "name": "page4", "title": "SETUP", "bg_color": BLACK,
+        "components": [
+            {"type": "Text", "objname": "tSUtitle", "x": 5, "y": 2, "w": 310, "h": 28,
+             "txt": "BATTERY SETUP", "font": 1, "pco": WHITE, "bco": BLACK, "xcen": 1, "ycen": 1},
+            
+            {"type": "Text", "objname": "lNomV", "x": 10, "y": 45, "w": 200, "h": 24,
+             "txt": "NOMINAL VOLTAGE:", "font": 0, "pco": BLUE, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Button", "objname": "bCycleV", "id_override": 2,
+             "x": 30, "y": 72, "w": 260, "h": 35,
+             "txt": "12.8 V (4S)", "font": 1, "pco": GREEN, "pco2": WHITE, "bco": DKGRAY, "bco2": BLUE,
+             "send_component_id": True},
+            {"type": "Text", "objname": "tNomV", "x": 30, "y": 72, "w": 260, "h": 35,
+             "txt": "12.8", "font": 1, "pco": GREEN, "bco": DKGRAY, "xcen": 1, "ycen": 1,
+             "_note": "Optional: STM32 updates this text. Or use button label directly."},
+            
+            {"type": "Text", "objname": "lCapAh", "x": 10, "y": 115, "w": 200, "h": 24,
+             "txt": "CAPACITY RATING:", "font": 0, "pco": BLUE, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Button", "objname": "bCycleCap", "id_override": 3,
+             "x": 30, "y": 140, "w": 260, "h": 35,
+             "txt": "100.0 Ah (LFP)", "font": 1, "pco": GREEN, "pco2": WHITE, "bco": DKGRAY, "bco2": BLUE,
+             "send_component_id": True},
+            {"type": "Text", "objname": "tCapAh", "x": 30, "y": 140, "w": 260, "h": 35,
+             "txt": "100.0", "font": 1, "pco": GREEN, "bco": DKGRAY, "xcen": 1, "ycen": 1,
+             "_note": "Optional: STM32 updates this text."},
+            
+            {"type": "Button", "objname": "bBack", "id_override": 1,
+             "x": 80, "y": 195, "w": 160, "h": 40,
+             "txt": "BACK", "font": 1, "pco": WHITE, "pco2": WHITE, "bco": DKGRAY, "bco2": RED,
+             "send_component_id": True},
+        ]
+    }
+    pages.append(p4)
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # PAGE 5: DATA LOGGER
+    # ═══════════════════════════════════════════════════════════════════
+    p5 = {
+        "id": 5, "name": "page5", "title": "DATALOG", "bg_color": BLACK,
+        "components": [
+            {"type": "Text", "objname": "tDLtitle", "x": 5, "y": 2, "w": 310, "h": 28,
+             "txt": "DATA LOGGER", "font": 1, "pco": WHITE, "bco": BLACK, "xcen": 1, "ycen": 1},
+            
+            {"type": "Text", "objname": "lState", "x": 10, "y": 45, "w": 120, "h": 24,
+             "txt": "Log State:", "font": 0, "pco": GRAY, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tLogState", "x": 135, "y": 45, "w": 170, "h": 24,
+             "txt": "STOPPED", "font": 1, "pco": RED, "bco": BLACK, "xcen": 0, "ycen": 1},
+            
+            {"type": "Text", "objname": "lInterval", "x": 10, "y": 73, "w": 120, "h": 24,
+             "txt": "Interval:", "font": 0, "pco": GRAY, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Number", "objname": "tInterval", "x": 135, "y": 73, "w": 100, "h": 24,
+             "val": 1000, "font": 0, "pco": WHITE, "bco": BLACK},
+            
+            {"type": "Text", "objname": "lCount", "x": 10, "y": 101, "w": 120, "h": 24,
+             "txt": "Samples:", "font": 0, "pco": GRAY, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tCount", "x": 135, "y": 101, "w": 170, "h": 24,
+             "txt": "0", "font": 1, "pco": WHITE, "bco": BLACK, "xcen": 0, "ycen": 1},
+            
+            {"type": "Text", "objname": "lWh", "x": 10, "y": 129, "w": 120, "h": 24,
+             "txt": "Energy Wh:", "font": 0, "pco": GRAY, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tWh", "x": 135, "y": 129, "w": 170, "h": 24,
+             "txt": "0.00", "font": 0, "pco": WHITE, "bco": BLACK, "xcen": 0, "ycen": 1},
+            
+            {"type": "Text", "objname": "lTime", "x": 10, "y": 157, "w": 120, "h": 24,
+             "txt": "Runtime:", "font": 0, "pco": GRAY, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tTime", "x": 135, "y": 157, "w": 170, "h": 24,
+             "txt": "00:00", "font": 0, "pco": WHITE, "bco": BLACK, "xcen": 0, "ycen": 1},
+            
+            {"type": "Button", "objname": "bBack", "id_override": 1,
+             "x": 5, "y": 195, "w": 150, "h": 40,
+             "txt": "BACK", "font": 1, "pco": WHITE, "pco2": WHITE, "bco": DKGRAY, "bco2": RED,
+             "send_component_id": True},
+            {"type": "Button", "objname": "bToggle", "id_override": 2,
+             "x": 165, "y": 195, "w": 150, "h": 40,
+             "txt": "START/STOP", "font": 1, "pco": WHITE, "pco2": WHITE, "bco": DKGRAY, "bco2": GREEN,
+             "send_component_id": True},
+        ]
+    }
+    pages.append(p5)
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # PAGE 6: HISTORY
+    # ═══════════════════════════════════════════════════════════════════
+    p6 = {
+        "id": 6, "name": "page6", "title": "HISTORY", "bg_color": BLACK,
+        "components": [
+            {"type": "Text", "objname": "tHStitle", "x": 5, "y": 2, "w": 310, "h": 28,
+             "txt": "HISTORY & TREND", "font": 1, "pco": WHITE, "bco": BLACK, "xcen": 1, "ycen": 1},
+            
+            {"type": "Text", "objname": "lRec", "x": 10, "y": 42, "w": 290, "h": 22,
+             "txt": "Last Measurement Record:", "font": 0, "pco": WHITE, "bco": BLACK, "xcen": 0, "ycen": 1},
+            
+            {"type": "Text", "objname": "lTarget", "x": 10, "y": 66, "w": 290, "h": 22,
+             "txt": "Target: LiFePO4 4S 100Ah", "font": 0, "pco": GREEN, "bco": BLACK, "xcen": 0, "ycen": 1},
+            
+            {"type": "Text", "objname": "lHistV", "x": 10, "y": 94, "w": 100, "h": 22,
+             "txt": "Voltage:", "font": 0, "pco": GRAY, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tHistV", "x": 110, "y": 94, "w": 70, "h": 22,
+             "txt": "0.00", "font": 1, "pco": WHITE, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "lHistI", "x": 185, "y": 94, "w": 60, "h": 22,
+             "txt": "Curr:", "font": 0, "pco": GRAY, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tHistI", "x": 245, "y": 94, "w": 65, "h": 22,
+             "txt": "0.00", "font": 0, "pco": WHITE, "bco": BLACK, "xcen": 0, "ycen": 1},
+            
+            {"type": "Text", "objname": "lHistSoc", "x": 10, "y": 120, "w": 60, "h": 22,
+             "txt": "SoC:", "font": 0, "pco": GRAY, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tHistSoc", "x": 70, "y": 120, "w": 80, "h": 22,
+             "txt": "0.0", "font": 1, "pco": GREEN, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "lHistSoh", "x": 160, "y": 120, "w": 55, "h": 22,
+             "txt": "SoH:", "font": 0, "pco": GRAY, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tHistSoh", "x": 215, "y": 120, "w": 80, "h": 22,
+             "txt": "100.0", "font": 0, "pco": WHITE, "bco": BLACK, "xcen": 0, "ycen": 1},
+            
+            {"type": "Text", "objname": "lHistStat", "x": 10, "y": 148, "w": 70, "h": 22,
+             "txt": "Status:", "font": 0, "pco": GRAY, "bco": BLACK, "xcen": 0, "ycen": 1},
+            {"type": "Text", "objname": "tHistStat", "x": 80, "y": 148, "w": 220, "h": 22,
+             "txt": "OK", "font": 0, "pco": GREEN, "bco": BLACK, "xcen": 0, "ycen": 1},
+            
+            {"type": "Button", "objname": "bBack", "id_override": 1,
+             "x": 80, "y": 195, "w": 160, "h": 40,
+             "txt": "BACK", "font": 1, "pco": WHITE, "pco2": WHITE, "bco": DKGRAY, "bco2": RED,
+             "send_component_id": True},
+        ]
+    }
+    pages.append(p6)
+    
+    return pages
+
+
+def format_page_report(pages):
+    """Format a human-readable guide for creating the project."""
+    lines = []
+    lines.append("=" * 72)
+    lines.append("  BIMA SOC LFP - NEXTION/TJC HMI PROJECT SPECIFICATION")
+    lines.append("  Display: 320 x 240  |  7 Pages  |  Dark Theme (Black BG)")
+    lines.append("=" * 72)
+    lines.append("")
+    
+    for page in pages:
+        lines.append(f"{'─' * 72}")
+        lines.append(f"  PAGE {page['id']}: {page['title']}  (name: {page['name']})")
+        lines.append(f"  Background Color: {page['bg_color']} (BLACK)")
+        lines.append(f"{'─' * 72}")
+        
+        comp_id = 0
+        for c in page["components"]:
+            cid = c.get("id_override", comp_id)
+            ctype = c["type"]
+            name = c["objname"]
+            
+            line = f"  [{ctype:10s}] objname=\"{name}\""
+            if "id_override" in c:
+                line += f"  (Component ID = {cid})"
+            line += f"\n              Position: x={c['x']}, y={c['y']}, w={c['w']}, h={c['h']}"
+            
+            if "txt" in c:
+                line += f"\n              Text: \"{c['txt']}\""
+            if "val" in c:
+                line += f"\n              Value: {c['val']}"
+            if c.get("send_component_id"):
+                line += "\n              ★ Touch Release Event → CENTANG 'Send Component ID'"
+            
+            lines.append(line)
+            lines.append("")
+            comp_id += 1
+    
+    return "\n".join(lines)
+
+
+def generate_preinitialize_scripts(pages):
+    """Generate Nextion 'Preinitialize Event' and 'Postinitialize Event'
+    scripts for each page that set the background and styling."""
+    scripts = {}
+    for page in pages:
+        code = []
+        # In Nextion Editor, you can put commands in page's Preinitialize Event
+        # But for component-based projects, the editor handles this.
+        # These scripts are useful for "Program.s" (global startup)
+        code.append(f"// Page {page['id']}: {page['title']}")
+        code.append(f"// Set page background")
+        code.append(f"// page{page['id']}.bco={page['bg_color']}")
+        scripts[page['name']] = "\n".join(code)
+    
+    # Global Program.s
+    program_s = []
+    program_s.append("// Program.s - Global Initialization")
+    program_s.append("// Runs once when Nextion powers on")
+    program_s.append("dim=100  // Full brightness")
+    program_s.append("baud=9600  // Match STM32 UART baud rate")
+    program_s.append("thup=1  // Enable touch coordinate stream on release")
+    program_s.append("page 0  // Start at Home page")
+    scripts["Program.s"] = "\n".join(program_s)
+    
+    return scripts
+
+
+if __name__ == "__main__":
+    pages = generate_nextion_instructions()
+    
+    # 1. Print the specification
+    report = format_page_report(pages)
+    print(report)
+    
+    # 2. Save specification to file
+    spec_file = os.path.join(os.path.dirname(__file__), "HMI_SPECIFICATION.txt")
+    with open(spec_file, "w", encoding="utf-8") as f:
+        f.write(report)
+    print(f"\n✅ Specification saved to: {spec_file}")
+    
+    # 3. Generate scripts
+    scripts = generate_preinitialize_scripts(pages)
+    scripts_file = os.path.join(os.path.dirname(__file__), "Program_s.txt")
+    with open(scripts_file, "w", encoding="utf-8") as f:
+        f.write(scripts["Program.s"])
+    print(f"✅ Program.s saved to: {scripts_file}")
+    
+    # 4. Save JSON for reference
+    json_file = os.path.join(os.path.dirname(__file__), "hmi_project.json")
+    with open(json_file, "w", encoding="utf-8") as f:
+        json.dump({"display": {"width": 320, "height": 240}, "pages": pages}, f, indent=2)
+    print(f"✅ JSON spec saved to: {json_file}")
+    
+    print("\n" + "=" * 72)
+    print("  LANGKAH SELANJUTNYA:")
+    print("  1. Buka Nextion Editor / USART HMI Editor")
+    print("  2. New Project → Pilih model 320x240")
+    print("  3. Ikuti spesifikasi di atas untuk memasang komponen")
+    print("  4. Atau baca PANDUAN_NEXTION_HMI_LENGKAP.md untuk tutorial detail")
+    print("=" * 72)

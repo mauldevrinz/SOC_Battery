@@ -1,0 +1,7 @@
+# File panduan ini sudah dipindahkan ke format yang lebih lengkap.
+# Silakan buka: PANDUAN_NEXTION_HMI.md
+#
+# Atau buka folder nextion_project/ untuk file-file pendukung:
+# - HMI_SPECIFICATION.txt  (spesifikasi komponen)
+# - Program_s.txt           (kode Program.s)
+# - hmi_project.json        (data JSON referensi)
